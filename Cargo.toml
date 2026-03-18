@@ -1,0 +1,55 @@
+[package]
+name = "avagen"
+version = "0.1.0"
+edition = "2021"
+description = "AI Avatar Generation Micro-SaaS API — zero-cost, offline face generation"
+
+[dependencies]
+# Web framework
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower = "0.5"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Database – NeonDB (PostgreSQL)
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "chrono", "tls-rustls"] }
+
+# Security / hashing
+sha2 = "0.10"
+hex = "0.4"
+rand = "0.8"
+
+# Rate limiting (per-IP)
+governor = "0.6"
+
+# Config
+dotenvy = "0.15"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# HTTP client (for HF Inference API)
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+# Image processing
+image = "0.25"
+
+# Encoding
+base64 = "0.22"
+
+# Unique IDs
+uuid = { version = "1", features = ["v4"] }
+
+# Async / utility
+anyhow = "1"
+
+[features]
+default = []

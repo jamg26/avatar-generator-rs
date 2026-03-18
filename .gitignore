@@ -1,0 +1,15 @@
+/target
+*.db
+*.db-shm
+*.db-wal
+.env
+model_cache/
+generated/
+
+# Python / Modal
+__pycache__/
+*.pyc
+*.pyo
+
+# Modal secrets stored locally
+.modal.toml
