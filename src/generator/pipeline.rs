@@ -3,34 +3,38 @@ use image::DynamicImage;
 use reqwest::Client;
 use std::time::Duration;
 
-/// Wraps the HuggingFace Inference API for text-to-image generation.
+/// Wrapper around the local inference sidecar for text-to-image generation.
+///
+/// The sidecar (`infer.py`) runs as a sibling process on port 8001 and
+/// executes FLUX.1-schnell directly on the GPU — no HuggingFace API calls.
+///
 /// A single instance is shared across all requests via `Arc<SdPipeline>`.
 #[derive(Clone)]
 pub struct SdPipeline {
-    hf_token: String,
-    model_repo: String,
+    infer_url: String,
     client: Client,
 }
 
 impl SdPipeline {
-    /// Creates a pipeline that delegates generation to the HF Inference API.
-    /// No model weights are downloaded locally — inference runs on HF's GPU.
-    pub fn load(model_repo: &str, hf_token: &str) -> Result<Self> {
+    /// Creates a pipeline that calls the local inference sidecar.
+    /// `infer_url` is typically `http://localhost:8001`.
+    pub fn load(model_repo: &str, infer_url: &str) -> Result<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(300))
             .build()
             .context("Failed to build HTTP client")?;
 
-        tracing::info!("HF Inference API pipeline ready (model: {model_repo})");
+        tracing::info!(
+            "Local inference pipeline ready (model: {model_repo}, sidecar: {infer_url})"
+        );
 
         Ok(Self {
-            hf_token: hf_token.to_string(),
-            model_repo: model_repo.to_string(),
+            infer_url: infer_url.to_string(),
             client,
         })
     }
 
-    /// Generates an image via the HF Inference API and returns a `DynamicImage`.
+    /// Generates an image via the local inference sidecar and returns a `DynamicImage`.
     pub async fn generate(
         &self,
         prompt: &str,
@@ -41,51 +45,54 @@ impl SdPipeline {
         guidance_scale: f64,
         seed: u64
     ) -> Result<DynamicImage> {
-        let url = format!("https://router.huggingface.co/hf-inference/models/{}", self.model_repo);
+        let url = format!("{}/generate", self.infer_url);
 
         let body =
             serde_json::json!({
-            "inputs": prompt,
-            "parameters": {
-                "negative_prompt": negative_prompt,
-                "width":  width,
-                "height": height,
-                "num_inference_steps": num_steps,
-                "guidance_scale": guidance_scale,
-                "seed": seed,
-            }
+            "prompt":              prompt,
+            "negative_prompt":    negative_prompt,
+            "width":              width,
+            "height":             height,
+            "num_inference_steps": num_steps,
+            "guidance_scale":     guidance_scale,
+            "seed":               seed,
         });
 
-        tracing::debug!(
-            "Calling HF Inference API: POST {url} ({width}x{height}, {num_steps} steps)"
-        );
+        tracing::debug!("Calling local sidecar: POST {url} ({width}x{height}, {num_steps} steps)");
 
         let response = self.client
             .post(&url)
-            .header("Authorization", format!("Bearer {}", self.hf_token))
             .json(&body)
             .send().await
-            .context("HF Inference API request failed")?;
+            .map_err(|e| {
+                if e.is_connect() {
+                    anyhow::anyhow!(
+                        "Inference server not reachable (still loading models) — retry in ~60 s"
+                    )
+                } else {
+                    anyhow::anyhow!("Inference request failed: {e}")
+                }
+            })?;
 
         let status = response.status();
 
         if status == 503 {
             let body_text = response.text().await.unwrap_or_default();
-            bail!("HF model is loading or unavailable (503). Try again in a moment. Details: {}", body_text);
+            bail!("Inference server returned 503 (model loading): {}", body_text);
         }
 
         if !status.is_success() {
             let body_text = response.text().await.unwrap_or_default();
-            bail!("HF Inference API returned {}: {}", status, body_text);
+            bail!("Inference server returned {}: {}", status, body_text);
         }
 
-        let bytes = response.bytes().await.context("Failed to read image bytes from HF API")?;
+        let bytes = response.bytes().await.context("Failed to read image bytes from sidecar")?;
         let img = tokio::task
-            ::spawn_blocking(move || { image::load_from_memory(&bytes) }).await
+            ::spawn_blocking(move || image::load_from_memory(&bytes)).await
             .map_err(|e| anyhow::anyhow!("image decode join: {e}"))?
-            .context("Failed to decode image returned by HF Inference API")?;
+            .context("Failed to decode PNG returned by inference server")?;
 
-        tracing::debug!("HF Inference API returned image: {}x{}", img.width(), img.height());
+        tracing::debug!("Inference server returned image: {}x{}", img.width(), img.height());
         Ok(img)
     }
 }

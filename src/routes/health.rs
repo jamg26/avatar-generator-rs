@@ -9,5 +9,5 @@ pub async fn handle() -> Json<Value> {
 }
 
 pub async fn home() -> &'static str {
-    "AvaGen — AI Avatar Generation API"
+    "AvaGen — AI Avatar Generation API made with ❤️ by Jamg"
 }

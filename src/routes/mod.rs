@@ -2,6 +2,7 @@ pub mod avatar;
 pub mod health;
 pub mod keys;
 pub mod usage;
+pub mod video;
 
 use std::{ sync::Arc, time::Duration };
 
@@ -11,7 +12,7 @@ use tower_http::{ cors::CorsLayer, trace::TraceLayer };
 
 use crate::{
     config::AppConfig,
-    generator::pipeline::SdPipeline,
+    generator::{ pipeline::SdPipeline, video_pipeline::VideoPipeline },
     middleware::{ api_key, rate_limit },
 };
 
@@ -20,13 +21,20 @@ pub struct AppState {
     pub pool: PgPool,
     pub config: AppConfig,
     pub pipeline: Option<Arc<SdPipeline>>,
+    pub video_pipeline: Option<Arc<VideoPipeline>>,
 }
 
-pub fn create_router(pool: PgPool, config: AppConfig, pipeline: Option<SdPipeline>) -> Router {
+pub fn create_router(
+    pool: PgPool,
+    config: AppConfig,
+    pipeline: Option<SdPipeline>,
+    video_pipeline: Option<VideoPipeline>
+) -> Router {
     let state = AppState {
         pool,
         config: config.clone(),
         pipeline: pipeline.map(Arc::new),
+        video_pipeline: video_pipeline.map(Arc::new),
     };
 
     let limiter = rate_limit::new_limiter(config.rate_limit_per_minute);
@@ -44,6 +52,7 @@ pub fn create_router(pool: PgPool, config: AppConfig, pipeline: Option<SdPipelin
     // Routes that require an API key
     let authed = Router::new()
         .route("/api/v1/avatar/generate", post(avatar::generate))
+        .route("/api/v1/video/generate", post(video::generate))
         .route("/api/v1/usage", get(usage::my_usage))
         .layer(middleware::from_fn_with_state(state.clone(), api_key::require_api_key));
 

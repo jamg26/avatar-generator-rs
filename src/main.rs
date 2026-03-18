@@ -1,4 +1,9 @@
-use avagen::{ config::AppConfig, db, generator::pipeline::SdPipeline, routes::create_router };
+use avagen::{
+    config::AppConfig,
+    db,
+    generator::{ pipeline::SdPipeline, video_pipeline::VideoPipeline },
+    routes::create_router,
+};
 use std::net::SocketAddr;
 use tracing_subscriber::{ layer::SubscriberExt, util::SubscriberInitExt };
 
@@ -33,7 +38,7 @@ async fn main() {
         tracing::warn!("SKIP_SD_PIPELINE set — avatar generation disabled");
         None
     } else {
-        match SdPipeline::load(&config.sd_model_repo, &config.hf_token) {
+        match SdPipeline::load(&config.sd_model_repo, &config.infer_url) {
             Ok(p) => {
                 tracing::info!("Stable Diffusion pipeline ready");
                 Some(p)
@@ -45,8 +50,29 @@ async fn main() {
         }
     };
 
+    // ── Video pipeline ───────────────────────────────────────────────────────
+    let skip_video = std::env
+        ::var("SKIP_VIDEO_PIPELINE")
+        .map(|v| (v == "1" || v == "true"))
+        .unwrap_or(false);
+    let video_pipeline: Option<VideoPipeline> = if skip_video {
+        tracing::warn!("SKIP_VIDEO_PIPELINE set — video generation disabled");
+        None
+    } else {
+        match VideoPipeline::load(&config.video_model_repo, &config.infer_url) {
+            Ok(p) => {
+                tracing::info!("Video pipeline ready");
+                Some(p)
+            }
+            Err(e) => {
+                tracing::error!("Failed to load video pipeline: {e:#} — video generation disabled");
+                None
+            }
+        }
+    };
+
     // ── HTTP server ──────────────────────────────────────────────────────────
-    let router = create_router(pool, config, pipeline);
+    let router = create_router(pool, config, pipeline, video_pipeline);
 
     let port: u16 = std::env
         ::var("PORT")

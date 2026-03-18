@@ -70,7 +70,50 @@ modal deploy modal_app.py
 
 The app scales to zero when idle — you only pay for actual inference time.
 
-## API Reference
+## Video Generation
+
+Animate any face photograph into a short (~4 s) MP4 audition clip using
+[Stable Video Diffusion XT](https://huggingface.co/stabilityai/stable-video-diffusion-img2vid-xt)
+via the HuggingFace Inference API — no local GPU required.
+
+```bash
+# Encode your face image to base64, then POST it
+FACE_B64=$(base64 -w 0 headshot.jpg)
+
+curl -s -X POST https://your-deployment.modal.run/api/v1/video/generate \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: avg_<key>" \
+  -d "$(jq -n --arg img "$FACE_B64" \
+       '{face_image: $img, motion_intensity: "natural", frame_rate: "smooth"}')" \
+  --output audition.mp4
+```
+
+### Video Generation Parameters
+
+```jsonc
+{
+  // One of these is required:
+  "face_image": "<base64-encoded JPEG or PNG, max 2 MB>",
+  "image_url": "https://example.com/headshot.jpg", // public URL alternative
+
+  // Optional
+  "motion_intensity": "natural", // subtle | natural (default) | expressive
+  "frame_rate": "smooth", // cinematic (3fps) | smooth (6fps, default) | fluid (8fps)
+  "seed": 42, // optional — for reproducible output
+}
+```
+
+| `motion_intensity` | SVD `motion_bucket_id` | Best for                     |
+| ------------------ | ---------------------- | ---------------------------- |
+| `subtle`           | 40                     | Formal / corporate auditions |
+| `natural`          | 127                    | General use (default)        |
+| `expressive`       | 210                    | Dramatic / emotional scenes  |
+
+Returns `video/mp4` bytes (~4 seconds, 25 frames).
+
+---
+
+## Avatar Generation
 
 ### Public
 
@@ -89,10 +132,11 @@ The app scales to zero when idle — you only pay for actual inference time.
 
 ### Authenticated (requires `X-API-Key` header)
 
-| Method | Path                      | Description              |
-| ------ | ------------------------- | ------------------------ |
-| POST   | `/api/v1/avatar/generate` | Generate an avatar image |
-| GET    | `/api/v1/usage`           | View your usage stats    |
+| Method | Path                      | Description                |
+| ------ | ------------------------- | -------------------------- |
+| POST   | `/api/v1/avatar/generate` | Generate an avatar image   |
+| POST   | `/api/v1/video/generate`  | Generate an audition video |
+| GET    | `/api/v1/usage`           | View your usage stats      |
 
 ### Avatar Generation Parameters
 
@@ -133,19 +177,21 @@ The app scales to zero when idle — you only pay for actual inference time.
 
 ## Environment Variables
 
-| Variable                | Default                            | Description                                     |
-| ----------------------- | ---------------------------------- | ----------------------------------------------- |
-| `DATABASE_URL`          | _(required)_                       | PostgreSQL connection string                    |
-| `ADMIN_SECRET`          | _(required)_                       | Secret for admin endpoints                      |
-| `HF_TOKEN`              | _(required)_                       | HuggingFace access token                        |
-| `SD_MODEL_REPO`         | `black-forest-labs/FLUX.1-schnell` | HuggingFace model repo                          |
-| `SD_NUM_STEPS`          | `4`                                | Inference steps (4 is optimal for FLUX-schnell) |
-| `SD_GUIDANCE_SCALE`     | `3.5`                              | Classifier-free guidance scale                  |
-| `SD_DEFAULT_SIZE`       | `1024`                             | Default output size in pixels                   |
-| `SKIP_SD_PIPELINE`      | `0`                                | Set to `1` to disable generation (returns 503)  |
-| `PORT`                  | `8080`                             | HTTP port                                       |
-| `RUST_LOG`              | `avagen=info,tower_http=info`      | Log filter                                      |
-| `RATE_LIMIT_PER_MINUTE` | `60`                               | Per-IP rate limit                               |
+| Variable                | Default                                         | Description                                     |
+| ----------------------- | ----------------------------------------------- | ----------------------------------------------- |
+| `DATABASE_URL`          | _(required)_                                    | PostgreSQL connection string                    |
+| `ADMIN_SECRET`          | _(required)_                                    | Secret for admin endpoints                      |
+| `HF_TOKEN`              | _(required)_                                    | HuggingFace access token                        |
+| `SD_MODEL_REPO`         | `black-forest-labs/FLUX.1-schnell`              | HuggingFace model repo                          |
+| `SD_NUM_STEPS`          | `4`                                             | Inference steps (4 is optimal for FLUX-schnell) |
+| `SD_GUIDANCE_SCALE`     | `3.5`                                           | Classifier-free guidance scale                  |
+| `SD_DEFAULT_SIZE`       | `1024`                                          | Default output size in pixels                   |
+| `SKIP_SD_PIPELINE`      | `0`                                             | Set to `1` to disable avatar generation (503)   |
+| `VIDEO_MODEL_REPO`      | `stabilityai/stable-video-diffusion-img2vid-xt` | HuggingFace image-to-video model                |
+| `SKIP_VIDEO_PIPELINE`   | `0`                                             | Set to `1` to disable video generation (503)    |
+| `PORT`                  | `8080`                                          | HTTP port                                       |
+| `RUST_LOG`              | `avagen=info,tower_http=info`                   | Log filter                                      |
+| `RATE_LIMIT_PER_MINUTE` | `60`                                            | Per-IP rate limit                               |
 
 ## Running the Test Suite
 

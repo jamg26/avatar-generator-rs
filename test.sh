@@ -223,14 +223,14 @@ b=$(cat /tmp/resp_body)
 assert_status "POST /generate invalid size → 400" "400" "$s"
 assert_contains "invalid size has error message" '"error"' "$b"
 
-# Valid body but pipeline disabled → 503
+# Valid body — pipeline disabled (SKIP_SD_PIPELINE=1) → 503,
+# or sidecar running (MOCK_MODELS=1 python infer.py) → 200.
 s=$(req POST "$BASE/api/v1/avatar/generate" \
      -H "Content-Type: application/json" \
      -H "X-API-Key: $API_KEY" \
      -d '{"age":"adult","sex":"male","ethnicity":"caucasian","size":512}')
 b=$(cat /tmp/resp_body)
-assert_status "POST /generate pipeline disabled → 503" "503" "$s"
-assert_contains "503 body has 'error'" '"error"' "$b"
+assert_status_any "POST /generate valid body → 200 (sidecar) or 503 (no pipeline)" "$s" "200" "503"
 
 # Missing/bad JSON body → 400 or 422
 s=$(req POST "$BASE/api/v1/avatar/generate" \
@@ -271,7 +271,7 @@ for body in \
        -H "Content-Type: application/json" \
        -H "X-API-Key: $API_KEY" \
        -d "$body")
-  assert_status "POST /generate body=$body → 503 (expected, no pipeline)" "503" "$s"
+  assert_status_any "POST /generate body=$body → 200 or 503" "$s" "200" "503"
 done
 
 # ── 8. CORS headers ───────────────────────────────────────────────────────────

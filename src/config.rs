@@ -2,11 +2,13 @@
 pub struct AppConfig {
     pub database_url: String,
     pub admin_secret: String,
-    pub hf_token: String,
+    /// Base URL of the local inference sidecar (infer.py). Defaults to http://localhost:8001.
+    pub infer_url: String,
     pub sd_model_repo: String,
     pub sd_num_steps: usize,
     pub sd_guidance_scale: f64,
     pub sd_default_size: usize,
+    pub video_model_repo: String,
     pub rate_limit_per_minute: u32,
 }
 
@@ -15,7 +17,9 @@ impl AppConfig {
         Self {
             database_url: std::env::var("DATABASE_URL").expect("DATABASE_URL must be set"),
             admin_secret: std::env::var("ADMIN_SECRET").expect("ADMIN_SECRET must be set"),
-            hf_token: std::env::var("HF_TOKEN").expect("HF_TOKEN must be set for image generation"),
+            infer_url: std::env
+                ::var("INFER_URL")
+                .unwrap_or_else(|_| "http://localhost:8001".into()),
             sd_model_repo: std::env
                 ::var("SD_MODEL_REPO")
                 .unwrap_or_else(|_| "runwayml/stable-diffusion-v1-5".into()),
@@ -34,6 +38,9 @@ impl AppConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(512),
+            video_model_repo: std::env
+                ::var("VIDEO_MODEL_REPO")
+                .unwrap_or_else(|_| "stabilityai/stable-video-diffusion-img2vid-xt".into()),
             rate_limit_per_minute: std::env
                 ::var("RATE_LIMIT_PER_MINUTE")
                 .ok()
