@@ -1,22 +1,27 @@
 # AvaGen — AI Avatar Generation API
 
-Serverless micro-SaaS API for generating AI avatar images from structured demographic descriptions. Built with Rust/Axum, backed by PostgreSQL, and powered by the HuggingFace Inference API (FLUX.1-schnell).
+Serverless micro-SaaS API for generating AI avatar images from structured demographic descriptions. Built with Rust/Axum, backed by PostgreSQL, and powered by a local [sd-turbo](https://huggingface.co/stabilityai/sd-turbo) inference sidecar.
 
 ## Architecture
 
-| Layer         | Technology                                                                                                                                           |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Web framework | [Axum](https://github.com/tokio-rs/axum) (Rust)                                                                                                      |
-| Database      | PostgreSQL ([NeonDB](https://neon.tech) — serverless, free tier available)                                                                           |
-| Image model   | [FLUX.1-schnell](https://huggingface.co/black-forest-labs/FLUX.1-schnell) via [HuggingFace Inference API](https://huggingface.co/docs/api-inference) |
-| Deployment    | [Modal.com](https://modal.com) serverless container (scale-to-zero)                                                                                  |
-| Auth          | API key (SHA-256 hashed, stored in DB)                                                                                                               |
+| Layer         | Technology                                                                                     |
+| ------------- | ---------------------------------------------------------------------------------------------- |
+| Web framework | [Axum](https://github.com/tokio-rs/axum) (Rust)                                                |
+| Database      | PostgreSQL ([NeonDB](https://neon.tech) — serverless, free tier available)                     |
+| Image model   | [sd-turbo](https://huggingface.co/stabilityai/sd-turbo) — local sidecar, 1-step, ~3–5 s on CPU |
+| Deployment    | [Modal.com](https://modal.com) serverless container, CPU-only (scale-to-zero, free tier)       |
+| Auth          | API key (SHA-256 hashed, stored in DB)                                                         |
+
+The Rust server handles routing, auth, rate-limiting, and DB — it proxies generation
+requests to a Python sidecar (`infer.py`) running on `localhost:8001`. The sidecar
+loads the model on startup and serves PNG results.
 
 ## Prerequisites
 
 - [Rust](https://rustup.rs/) (stable)
+- Python 3.10+ with [diffusers](https://github.com/huggingface/diffusers) (`pip install diffusers transformers accelerate torch Pillow`)
 - A [NeonDB](https://neon.tech) (or any PostgreSQL) database
-- A [HuggingFace](https://huggingface.co/settings/tokens) access token (free)
+- A [HuggingFace](https://huggingface.co/settings/tokens) access token (free, needed to download model weights)
 
 ## Quick Start
 
@@ -25,19 +30,27 @@ Serverless micro-SaaS API for generating AI avatar images from structured demogr
 cp .env.example .env
 # Edit .env — set DATABASE_URL, ADMIN_SECRET, and HF_TOKEN at minimum
 
-# 2. Run locally
-cargo run --release
+# 2. Install Python dependencies (one-time)
+python -m venv .venv && source .venv/bin/activate
+pip install diffusers transformers accelerate torch Pillow fastapi uvicorn pydantic
 
-# 3. Create an API key
+# 3. Start the inference sidecar (downloads ~2.5 GB model on first run)
+python infer.py
+# Wait for: "Pipeline ready on cpu" before proceeding
+
+# 4. In a separate terminal, start the Rust server
+cargo run
+
+# 5. Create an API key
 curl -s -X POST http://localhost:8080/api/admin/keys \
   -H "Content-Type: application/json" \
   -H "X-Admin-Secret: <your-admin-secret>" \
-  -d '{"name": "my-app", "quota": 1000}'
+  -d '{"name": "my-app"}'
 
-# 4. Generate an avatar
+# 6. Generate an avatar
 curl -s -X POST http://localhost:8080/api/v1/avatar/generate \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: avg_<key-from-step-3>" \
+  -H "X-API-Key: avg_<key-from-step-5>" \
   -d '{
     "age": "young_adult",
     "sex": "female",
@@ -50,9 +63,16 @@ curl -s -X POST http://localhost:8080/api/v1/avatar/generate \
     "background": "white"
   }' --output avatar.png
 
-# 5. Check usage
+# 7. Check usage
 curl -s http://localhost:8080/api/v1/usage \
   -H "X-API-Key: avg_<key>"
+```
+
+### Skip model loading (fast local dev)
+
+```bash
+# Start sidecar with a mock stub (returns a solid-color PNG instantly, no model download)
+MOCK_MODELS=1 python infer.py
 ```
 
 ## Deploy to Modal
@@ -64,54 +84,18 @@ pip install modal
 # Authenticate
 modal setup
 
-# Deploy (reads secrets from your .env file)
+# Build the Rust binary first
+cargo build --release
+
+# Deploy — reads secrets from your .env file
 modal deploy modal_app.py
 ```
 
+The deployment runs on **CPU-only** containers to stay within Modal's free tier.
+The sd-turbo model (~2.5 GB) is cached in a Modal Volume after the first cold start,
+so subsequent starts load in ~5–10 s instead of re-downloading.
+
 The app scales to zero when idle — you only pay for actual inference time.
-
-## Video Generation
-
-Animate any face photograph into a short (~4 s) MP4 audition clip using
-[Stable Video Diffusion XT](https://huggingface.co/stabilityai/stable-video-diffusion-img2vid-xt)
-via the HuggingFace Inference API — no local GPU required.
-
-```bash
-# Encode your face image to base64, then POST it
-FACE_B64=$(base64 -w 0 headshot.jpg)
-
-curl -s -X POST https://your-deployment.modal.run/api/v1/video/generate \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: avg_<key>" \
-  -d "$(jq -n --arg img "$FACE_B64" \
-       '{face_image: $img, motion_intensity: "natural", frame_rate: "smooth"}')" \
-  --output audition.mp4
-```
-
-### Video Generation Parameters
-
-```jsonc
-{
-  // One of these is required:
-  "face_image": "<base64-encoded JPEG or PNG, max 2 MB>",
-  "image_url": "https://example.com/headshot.jpg", // public URL alternative
-
-  // Optional
-  "motion_intensity": "natural", // subtle | natural (default) | expressive
-  "frame_rate": "smooth", // cinematic (3fps) | smooth (6fps, default) | fluid (8fps)
-  "seed": 42, // optional — for reproducible output
-}
-```
-
-| `motion_intensity` | SVD `motion_bucket_id` | Best for                     |
-| ------------------ | ---------------------- | ---------------------------- |
-| `subtle`           | 40                     | Formal / corporate auditions |
-| `natural`          | 127                    | General use (default)        |
-| `expressive`       | 210                    | Dramatic / emotional scenes  |
-
-Returns `video/mp4` bytes (~4 seconds, 25 frames).
-
----
 
 ## Avatar Generation
 
@@ -132,11 +116,10 @@ Returns `video/mp4` bytes (~4 seconds, 25 frames).
 
 ### Authenticated (requires `X-API-Key` header)
 
-| Method | Path                      | Description                |
-| ------ | ------------------------- | -------------------------- |
-| POST   | `/api/v1/avatar/generate` | Generate an avatar image   |
-| POST   | `/api/v1/video/generate`  | Generate an audition video |
-| GET    | `/api/v1/usage`           | View your usage stats      |
+| Method | Path                      | Description              |
+| ------ | ------------------------- | ------------------------ |
+| POST   | `/api/v1/avatar/generate` | Generate an avatar image |
+| GET    | `/api/v1/usage`           | View your usage stats    |
 
 ### Avatar Generation Parameters
 
@@ -161,7 +144,7 @@ Returns `video/mp4` bytes (~4 seconds, 25 frames).
   "background": "white", // white | gray | blue | gradient | nature | studio
   "style": "photorealistic", // photorealistic | digital_art | anime | cartoon | watercolor | oil_painting | pixel_art
   "format": "png", // png | jpeg | webp
-  "size": 1024, // integer, 128–1500 — rounded to nearest multiple of 64 (default: 1024)
+  "size": 512, // integer, 128–1500 — rounded to nearest multiple of 64 (default: 512)
   "seed": 42, // optional — use for reproducible results
 }
 ```
@@ -177,30 +160,32 @@ Returns `video/mp4` bytes (~4 seconds, 25 frames).
 
 ## Environment Variables
 
-| Variable                | Default                                         | Description                                     |
-| ----------------------- | ----------------------------------------------- | ----------------------------------------------- |
-| `DATABASE_URL`          | _(required)_                                    | PostgreSQL connection string                    |
-| `ADMIN_SECRET`          | _(required)_                                    | Secret for admin endpoints                      |
-| `HF_TOKEN`              | _(required)_                                    | HuggingFace access token                        |
-| `SD_MODEL_REPO`         | `black-forest-labs/FLUX.1-schnell`              | HuggingFace model repo                          |
-| `SD_NUM_STEPS`          | `4`                                             | Inference steps (4 is optimal for FLUX-schnell) |
-| `SD_GUIDANCE_SCALE`     | `3.5`                                           | Classifier-free guidance scale                  |
-| `SD_DEFAULT_SIZE`       | `1024`                                          | Default output size in pixels                   |
-| `SKIP_SD_PIPELINE`      | `0`                                             | Set to `1` to disable avatar generation (503)   |
-| `VIDEO_MODEL_REPO`      | `stabilityai/stable-video-diffusion-img2vid-xt` | HuggingFace image-to-video model                |
-| `SKIP_VIDEO_PIPELINE`   | `0`                                             | Set to `1` to disable video generation (503)    |
-| `PORT`                  | `8080`                                          | HTTP port                                       |
-| `RUST_LOG`              | `avagen=info,tower_http=info`                   | Log filter                                      |
-| `RATE_LIMIT_PER_MINUTE` | `60`                                            | Per-IP rate limit                               |
+| Variable                | Default                       | Description                                               |
+| ----------------------- | ----------------------------- | --------------------------------------------------------- |
+| `DATABASE_URL`          | _(required)_                  | PostgreSQL connection string                              |
+| `ADMIN_SECRET`          | _(required)_                  | Secret for admin endpoints                                |
+| `HF_TOKEN`              | _(required)_                  | HuggingFace token for downloading model weights           |
+| `SD_MODEL_REPO`         | `stabilityai/sd-turbo`        | HuggingFace model repo                                    |
+| `SD_NUM_STEPS`          | `1`                           | Inference steps (1 is optimal for sd-turbo)               |
+| `SD_GUIDANCE_SCALE`     | `0.0`                         | Classifier-free guidance scale (0.0 for distilled models) |
+| `SD_DEFAULT_SIZE`       | `512`                         | Default output size in pixels                             |
+| `SKIP_SD_PIPELINE`      | `0`                           | Set to `1` to disable avatar generation (503)             |
+| `HF_HOME`               | `~/.cache/huggingface`        | Local model weight cache directory                        |
+| `PORT`                  | `8080`                        | HTTP port                                                 |
+| `RUST_LOG`              | `avagen=info,tower_http=info` | Log filter                                                |
+| `RATE_LIMIT_PER_MINUTE` | `60`                          | Per-IP rate limit                                         |
 
 ## Running the Test Suite
 
 ```bash
-# Run against a local instance
+# Run against a local instance (both sidecar and cargo run must be running)
 ADMIN_SECRET=<your-secret> ./test.sh
 
 # Run against a deployed instance
 BASE=https://your-deployment.modal.run ADMIN_SECRET=<your-secret> ./test.sh
+
+# Run sidecar unit tests without starting Cargo
+MOCK_MODELS=1 pytest tests/
 ```
 
 ## License
