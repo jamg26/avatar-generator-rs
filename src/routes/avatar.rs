@@ -12,11 +12,12 @@ pub async fn generate(
     Extension(key): Extension<db::ApiKeyRow>,
     Json(req): Json<AvatarRequest>
 ) -> Result<Response, AppError> {
-    // Validate size
-    let size = req.size.unwrap_or(state.config.sd_default_size);
-    if !matches!(size, 128 | 256 | 512 | 768 | 1024) {
-        return Err(AppError::BadRequest("size must be 128, 256, 512, 768, or 1024".into()));
+    // Validate size and round to nearest multiple of 64 (required by FLUX for efficient inference)
+    let size_raw = req.size.unwrap_or(state.config.sd_default_size);
+    if !(128..=1500).contains(&size_raw) {
+        return Err(AppError::BadRequest("size must be between 128 and 1500".into()));
     }
+    let size = ((size_raw + 32) / 64) * 64;
 
     let prompt = req.to_prompt();
     let negative = req.negative_prompt().to_string();

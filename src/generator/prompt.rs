@@ -43,7 +43,7 @@ pub struct AvatarRequest {
     /// png | jpeg | webp
     #[serde(default = "default_format")]
     pub format: ImageFormat,
-    /// 128 | 256 | 512 | 768 | 1024
+    /// Output size in pixels (128–1500, rounded to nearest multiple of 64)
     #[serde(default)]
     pub size: Option<usize>,
     /// Optional seed for reproducible output

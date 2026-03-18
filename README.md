@@ -117,7 +117,7 @@ The app scales to zero when idle — you only pay for actual inference time.
   "background": "white", // white | gray | blue | gradient | nature | studio
   "style": "photorealistic", // photorealistic | digital_art | anime | cartoon | watercolor | oil_painting | pixel_art
   "format": "png", // png | jpeg | webp
-  "size": 1024, // 128 | 256 | 512 | 768 | 1024
+  "size": 1024, // integer, 128–1500 — rounded to nearest multiple of 64 (default: 1024)
   "seed": 42, // optional — use for reproducible results
 }
 ```
