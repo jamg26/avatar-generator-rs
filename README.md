@@ -9,7 +9,7 @@ Serverless micro-SaaS API for generating AI avatar images from structured demogr
 | Web framework | [Axum](https://github.com/tokio-rs/axum) (Rust)                                                |
 | Database      | PostgreSQL ([NeonDB](https://neon.tech) — serverless, free tier available)                     |
 | Image model   | [sd-turbo](https://huggingface.co/stabilityai/sd-turbo) — local sidecar, 1-step, ~3–5 s on CPU |
-| Deployment    | [Modal.com](https://modal.com) serverless container, CPU-only (scale-to-zero, free tier)       |
+| Deployment    | [HuggingFace Spaces](https://huggingface.co/spaces/jamg/avagen) — Docker, CPU-only, public     |
 | Auth          | API key (SHA-256 hashed, stored in DB)                                                         |
 
 The Rust server handles routing, auth, rate-limiting, and DB — it proxies generation
@@ -75,27 +75,23 @@ curl -s http://localhost:8080/api/v1/usage \
 MOCK_MODELS=1 python infer.py
 ```
 
-## Deploy to Modal
+## Deploy to HuggingFace Spaces
 
 ```bash
-# Install Modal client
-pip install modal
-
-# Authenticate
-modal setup
-
-# Build the Rust binary first
-cargo build --release
-
-# Deploy — reads secrets from your .env file
-modal deploy modal_app.py
+# One-command deploy (reads DATABASE_URL, ADMIN_SECRET, HF_TOKEN from .env)
+python deploy_spaces.py
 ```
 
-The deployment runs on **CPU-only** containers to stay within Modal's free tier.
-The sd-turbo model (~2.5 GB) is cached in a Modal Volume after the first cold start,
-so subsequent starts load in ~5–10 s instead of re-downloading.
+This will:
 
-The app scales to zero when idle — you only pay for actual inference time.
+1. Create the public Docker Space `jamg/avagen` on HuggingFace (if it doesn't already exist)
+2. Push three secrets into the Space (`DATABASE_URL`, `ADMIN_SECRET`, `HF_TOKEN`)
+3. Upload all source files and trigger a Docker build (~5 min for Rust + model download)
+
+The sd-turbo model (~2.5 GB) is **baked into the Docker image** at build time, so cold
+starts are fast — the sidecar loads from disk in ~10 s rather than re-downloading.
+
+The Space is publicly accessible at `https://jamg-avagen.hf.space`.
 
 ## Avatar Generation
 
@@ -181,8 +177,8 @@ The app scales to zero when idle — you only pay for actual inference time.
 # Run against a local instance (both sidecar and cargo run must be running)
 ADMIN_SECRET=<your-secret> ./test.sh
 
-# Run against a deployed instance
-BASE=https://your-deployment.modal.run ADMIN_SECRET=<your-secret> ./test.sh
+# Run against the deployed HF Space
+BASE=https://jamg-avagen.hf.space ADMIN_SECRET=<your-secret> ./test.sh
 
 # Run sidecar unit tests without starting Cargo
 MOCK_MODELS=1 pytest tests/

@@ -39,6 +39,10 @@ log = logging.getLogger("infer")
 # Environment setup
 # ---------------------------------------------------------------------------
 
+# Suppress tqdm progress bars — in non-TTY environments (Docker, piped logs)
+# tqdm prints the final "100%" line twice (once on completion, once on close).
+os.environ.setdefault("TQDM_DISABLE", "1")
+
 # Auto-load .env from the project root (same directory as this file) so that
 # `python infer.py` works without manually exporting env vars first.
 _env_file = os.path.join(os.path.dirname(__file__) or ".", ".env")
@@ -66,6 +70,7 @@ VIDEO_MODEL = os.environ.get("VIDEO_MODEL_REPO", "stabilityai/stable-video-diffu
 
 _flux_pipe = None
 _svd_pipe  = None
+_pipe_lock = threading.Lock()   # serialise SD pipeline calls — scheduler is not thread-safe
 _svd_lock  = threading.Lock()
 
 # ---------------------------------------------------------------------------
@@ -249,7 +254,8 @@ def generate(req: GenerateRequest) -> Response:
     )
     if req.negative_prompt:
         kwargs["negative_prompt"] = req.negative_prompt
-    result = _flux_pipe(**kwargs)
+    with _pipe_lock:
+        result = _flux_pipe(**kwargs)
     img = result.images[0]
     buf = io.BytesIO()
     img.save(buf, format="PNG")

@@ -6,10 +6,7 @@
 model_cache/
 generated/
 
-# Python / Modal
+# Python
 __pycache__/
 *.pyc
 *.pyo
-
-# Modal secrets stored locally
-.modal.toml
