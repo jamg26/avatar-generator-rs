@@ -1,22 +1,18 @@
 """Local inference sidecar for AvaGen.
 
-Runs as a subprocess inside the Modal container alongside the Rust Axum server.
-Exposes a local HTTP API on 127.0.0.1:8001 — the Rust binary calls these
-endpoints instead of the remote HuggingFace Inference API.
+Runs as a subprocess inside the Modal container (or locally) alongside the
+Rust Axum server. Exposes a local HTTP API on 127.0.0.1:8001.
 
 Endpoints:
   GET  /health          → {"status": "ok", "mock": bool, "flux_loaded": bool, "svd_loaded": bool}
-  POST /generate        → raw PNG bytes  (FLUX.1-schnell text-to-image)
-  POST /video/generate  → raw MP4 bytes  (SVD XT image-to-video)
+  POST /generate        → raw PNG bytes  (sd-turbo text-to-image, ~3-5 s on CPU)
 
 Environment variables:
   MOCK_MODELS=1           Skip loading real models; return minimal stub outputs.
-                          Use this for local integration tests without a GPU.
   HF_HOME=/path           Override the HuggingFace model cache directory.
   HF_TOKEN or HUGGING_FACE_HUB_TOKEN
-                          Token for downloading gated models from HuggingFace Hub.
-  SD_MODEL_REPO           FLUX model repo  (default: black-forest-labs/FLUX.1-schnell).
-  VIDEO_MODEL_REPO        SVD model repo   (default: stabilityai/stable-video-diffusion-img2vid-xt).
+                          Token for downloading models from HuggingFace Hub.
+  SD_MODEL_REPO           Model repo  (default: stabilityai/sd-turbo).
 """
 from __future__ import annotations
 
@@ -43,14 +39,25 @@ log = logging.getLogger("infer")
 # Environment setup
 # ---------------------------------------------------------------------------
 
+# Auto-load .env from the project root (same directory as this file) so that
+# `python infer.py` works without manually exporting env vars first.
+_env_file = os.path.join(os.path.dirname(__file__) or ".", ".env")
+if os.path.exists(_env_file):
+    with open(_env_file) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _, _v = _line.partition("=")
+                os.environ.setdefault(_k.strip(), _v.strip())
+
 # Accept both HF_TOKEN (project convention) and HUGGING_FACE_HUB_TOKEN (HF Hub convention).
 _hf = os.environ.get("HUGGING_FACE_HUB_TOKEN") or os.environ.get("HF_TOKEN")
 if _hf:
     os.environ["HUGGING_FACE_HUB_TOKEN"] = _hf
 
 MOCK        = os.environ.get("MOCK_MODELS", "0") in ("1", "true", "yes")
-HF_HOME     = os.environ.get("HF_HOME", "/cache/hf")
-SD_MODEL    = os.environ.get("SD_MODEL_REPO",    "black-forest-labs/FLUX.1-schnell")
+HF_HOME     = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+SD_MODEL    = os.environ.get("SD_MODEL_REPO",    "stabilityai/sd-turbo")
 VIDEO_MODEL = os.environ.get("VIDEO_MODEL_REPO", "stabilityai/stable-video-diffusion-img2vid-xt")
 
 # ---------------------------------------------------------------------------
@@ -68,28 +75,37 @@ _svd_lock  = threading.Lock()
 def _load_flux() -> None:
     global _flux_pipe
     if MOCK:
-        log.info("MOCK_MODELS=1 — FLUX stub active (no GPU required)")
+        log.info("MOCK_MODELS=1 — SD stub active (no GPU required)")
         _flux_pipe = "mock"
         return
 
     import torch
-    from diffusers import FluxPipeline
+    from diffusers import AutoPipelineForText2Image
 
-    log.info(f"Loading FLUX model: {SD_MODEL} …")
-    pipe = FluxPipeline.from_pretrained(
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # bfloat16/float16 on GPU; float32 on CPU (half-precision is slower on CPU)
+    dtype = torch.bfloat16 if device == "cuda" else torch.float32
+
+    log.info(f"Loading model: {SD_MODEL} on {device} ({dtype}) …")
+    pipe = AutoPipelineForText2Image.from_pretrained(
         SD_MODEL,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=dtype,
         cache_dir=os.path.join(HF_HOME, "hub"),
     )
-    # Sequential offload keeps only the active layer on-GPU — essential because
-    # the FLUX transformer (12 B params × 2 B = ~24 GiB) exceeds the A10G's
-    # 22 GiB; model_cpu_offload loads entire sub-modules which still OOMs.
-    pipe.enable_sequential_cpu_offload()
-    pipe.enable_attention_slicing("max")
-    pipe.vae.enable_tiling()
-    pipe.vae.enable_slicing()
+
+    if device == "cuda":
+        # Sequential offload keeps only the active layer on-GPU — essential for
+        # large models like FLUX that exceed the A10G's 22 GiB VRAM.
+        pipe.enable_sequential_cpu_offload()
+        pipe.enable_attention_slicing("max")
+        if hasattr(pipe, "vae"):
+            pipe.vae.enable_tiling()
+            pipe.vae.enable_slicing()
+    else:
+        pipe = pipe.to(device)
+
     _flux_pipe = pipe
-    log.info("FLUX pipeline ready")
+    log.info(f"Pipeline ready on {device}")
 
 
 def _load_svd() -> None:
@@ -217,11 +233,13 @@ def generate(req: GenerateRequest) -> Response:
         return Response(content=buf.getvalue(), media_type="image/png")
 
     import torch
-    torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     generator = torch.Generator().manual_seed(req.seed)
-    result = _flux_pipe(
+    # Build kwargs; omit negative_prompt for single-step distilled models
+    # (sd-turbo, FLUX-schnell) where it has no effect and may raise an error.
+    kwargs: dict = dict(
         prompt=req.prompt,
-        negative_prompt=req.negative_prompt or None,
         width=req.width,
         height=req.height,
         num_inference_steps=req.num_inference_steps,
@@ -229,6 +247,9 @@ def generate(req: GenerateRequest) -> Response:
         generator=generator,
         output_type="pil",
     )
+    if req.negative_prompt:
+        kwargs["negative_prompt"] = req.negative_prompt
+    result = _flux_pipe(**kwargs)
     img = result.images[0]
     buf = io.BytesIO()
     img.save(buf, format="PNG")

@@ -1,15 +1,15 @@
 """
 Modal deployment for AvaGen — AI Avatar Generation API.
 
-Architecture: A10G GPU container running two processes side-by-side:
+Architecture: CPU-only container running two processes side-by-side:
   • Rust / Axum server  — external HTTPS traffic on port 8080
                           (API keys, rate-limiting, DB, response encoding)
   • Python sidecar       — local inference on port 8001
-                          (FLUX.1-schnell text→image, SVD XT image→video)
+                          (sd-turbo text→image, ~2-4 s per image)
 
 The Rust binary calls localhost:8001 for all generation work.
-Model weights are cached in a Modal Volume so the first deploy download (~34 GB)
-only happens once; subsequent cold starts load from the Volume in ~30–90 s.
+Model weights (~2.5 GB) are downloaded on first cold start and cached in a
+Modal Volume so subsequent starts skip the download (~5–10 s to load).
 
 Deploy:
     modal deploy modal_app.py
@@ -17,7 +17,7 @@ Deploy:
 Serve (ephemeral / test):
     modal serve modal_app.py
 
-Test with mock models (no GPU, no HF token needed):
+Test with mock models (no HF token needed):
     MOCK_MODELS=1 modal serve modal_app.py
 """
 
@@ -28,25 +28,22 @@ app = modal.App("avagen")
 # ---------------------------------------------------------------------------
 # Modal Volume — persists HF model weights across container restarts.
 #
-# First cold start: ~20–40 min to download
-#   • FLUX.1-schnell — ~24 GB (bfloat16)
-#   • SVD XT         — ~10 GB (fp16)  [lazy-loaded on first video request]
-#
-# Subsequent starts: weights served from Volume, loading in ~30–90 s.
+# First cold start: ~5 min to download sd-turbo (~2.5 GB)
+# Subsequent starts: weights served from Volume, loading in ~5–10 s.
 # ---------------------------------------------------------------------------
 model_cache = modal.Volume.from_name("avagen-model-cache", create_if_missing=True)
 
 # ---------------------------------------------------------------------------
-# Container image — Python 3.11 + CUDA-capable PyTorch + diffusers stack
+# Container image — Python 3.11 + CPU PyTorch + diffusers stack
 # ---------------------------------------------------------------------------
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("libssl3", "ca-certificates", "libgomp1")
-    # PyTorch with CUDA 12.1 wheels (A10G driver)
+    # CPU-only PyTorch — smaller image, no GPU driver requirements
     .pip_install(
         "torch",
         "torchvision",
-        extra_options="--extra-index-url https://download.pytorch.org/whl/cu121",
+        extra_options="--extra-index-url https://download.pytorch.org/whl/cpu",
     )
     # Inference stack + sidecar API server
     .pip_install(
@@ -59,7 +56,6 @@ image = (
         "uvicorn[standard]>=0.27",
         "pydantic>=2.5",
         "Pillow>=10",
-        "av",           # PyAV — MP4 encoding without a system ffmpeg dependency
     )
     # Bake the pre-built Rust binary
     .add_local_file(
@@ -83,20 +79,21 @@ image = (
 @app.function(
     image=image,
     secrets=[modal.Secret.from_dotenv()],
-    gpu="A10G",
     volumes={"/cache": model_cache},
     # Keep 1 container always warm so models stay loaded
     min_containers=1,
-    # Generation can take up to ~60 s on GPU; allow plenty of headroom
-    timeout=600,
+    # sd-turbo on CPU takes ~3–5 s per image; 300 s is plenty of headroom
+    timeout=300,
+    # Enough RAM for sd-turbo (~2.5 GB model + working memory)
+    memory=8192,
 )
-@modal.web_server(8080, startup_timeout=60.0)
+@modal.web_server(8080, startup_timeout=120.0)
 def serve():
     """
     Launch the Python inference sidecar (port 8001) then the Rust Axum server (port 8080).
     Modal routes all external HTTPS traffic to port 8080.
 
-    The sidecar loads FLUX.1-schnell from the Volume cache on startup (~30–90 s).
+    The sidecar loads sd-turbo from the Volume cache on startup (~5–10 s after first download).
     Generation requests that arrive before the model is ready receive a 503 and
     should be retried — this only affects cold starts, not warm containers.
     """
@@ -110,8 +107,11 @@ def serve():
         "TRANSFORMERS_CACHE": "/cache/hf",
         # Normalise both token conventions — HF Hub prefers HUGGING_FACE_HUB_TOKEN
         "HUGGING_FACE_HUB_TOKEN": os.environ.get("HF_TOKEN", ""),
-        # Reduce allocator fragmentation — recommended when near VRAM limits
-        "PYTORCH_ALLOC_CONF": "expandable_segments:True",
+        # sd-turbo settings
+        "SD_MODEL_REPO": "stabilityai/sd-turbo",
+        "SD_NUM_STEPS": "1",
+        "SD_GUIDANCE_SCALE": "0.0",
+        "SD_DEFAULT_SIZE": "512",
     }
 
     # Start the inference sidecar — model loading happens asynchronously inside
