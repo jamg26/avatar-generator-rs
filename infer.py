@@ -5,14 +5,14 @@ Rust Axum server. Exposes a local HTTP API on 127.0.0.1:8001.
 
 Endpoints:
   GET  /health          → {"status": "ok", "mock": bool, "flux_loaded": bool, "svd_loaded": bool}
-  POST /generate        → raw PNG bytes  (sd-turbo text-to-image, ~3-5 s on CPU)
+  POST /generate        → raw PNG bytes  (LCM_Dreamshaper_v7 text-to-image, ~10-20 s on CPU)
 
 Environment variables:
   MOCK_MODELS=1           Skip loading real models; return minimal stub outputs.
   HF_HOME=/path           Override the HuggingFace model cache directory.
   HF_TOKEN or HUGGING_FACE_HUB_TOKEN
                           Token for downloading models from HuggingFace Hub.
-  SD_MODEL_REPO           Model repo  (default: stabilityai/sd-turbo).
+  SD_MODEL_REPO           Model repo  (default: SimianLuo/LCM_Dreamshaper_v7).
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ import logging
 import os
 import threading
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Any, Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -69,8 +69,8 @@ VIDEO_MODEL = os.environ.get("VIDEO_MODEL_REPO", "stabilityai/stable-video-diffu
 # Global model holders
 # ---------------------------------------------------------------------------
 
-_flux_pipe = None
-_svd_pipe  = None
+_flux_pipe: Any = None
+_svd_pipe: Any = None
 _pipe_lock = threading.Lock()   # serialise SD pipeline calls — scheduler is not thread-safe
 _svd_lock  = threading.Lock()
 
@@ -86,7 +86,7 @@ def _load_flux() -> None:
         return
 
     import torch
-    from diffusers import AutoPipelineForText2Image
+    from diffusers.pipelines.auto_pipeline import AutoPipelineForText2Image
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # bfloat16/float16 on GPU; float32 on CPU (half-precision is slower on CPU)
@@ -97,6 +97,11 @@ def _load_flux() -> None:
         SD_MODEL,
         torch_dtype=dtype,
         cache_dir=os.path.join(HF_HOME, "hub"),
+        # Disable the NSFW safety checker — it produces false positives on
+        # legitimate portrait prompts (skin tones, body shots, etc.) and would
+        # silently return a black image instead of the generated avatar.
+        safety_checker=None,
+        requires_safety_checker=False,
     )
 
     if device == "cuda":
@@ -111,7 +116,7 @@ def _load_flux() -> None:
         pipe = pipe.to(device)
 
     if SD_USE_LCM:
-        from diffusers import LCMScheduler
+        from diffusers.schedulers.scheduling_lcm import LCMScheduler
         pipe.scheduler = LCMScheduler.from_config(pipe.scheduler.config)
         log.info("LCMScheduler applied (4-step CFG mode)")
 
@@ -127,7 +132,7 @@ def _load_svd() -> None:
         return
 
     import torch
-    from diffusers import StableVideoDiffusionPipeline
+    from diffusers.pipelines.stable_video_diffusion.pipeline_stable_video_diffusion import StableVideoDiffusionPipeline
 
     log.info(f"Loading SVD model: {VIDEO_MODEL} …")
     pipe = StableVideoDiffusionPipeline.from_pretrained(

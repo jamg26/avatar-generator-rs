@@ -7,7 +7,7 @@ sdk: docker
 pinned: false
 app_port: 7860
 license: mit
-short_description: AI avatar generation API — LCM_Dreamshaper_v7, Rust/Axum, CPU
+short_description: AI avatar API — LCM_Dreamshaper_v7, Rust/Axum
 ---
 
 # AvaGen — AI Avatar Generation API
