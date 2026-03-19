@@ -1,7 +1,7 @@
 use avagen::{
     config::AppConfig,
     db,
-    generator::{ pipeline::SdPipeline, video_pipeline::VideoPipeline },
+    generator::{ stablehorde::StableHordePipeline, video_pipeline::VideoPipeline },
     routes::create_router,
 };
 use std::net::SocketAddr;
@@ -29,26 +29,11 @@ async fn main() {
     let pool = db::init_pool(&config.database_url).await;
     tracing::info!("PostgreSQL database ready");
 
-    // ── Stable Diffusion pipeline ────────────────────────────────────────────
-    let skip_sd = std::env
-        ::var("SKIP_SD_PIPELINE")
-        .map(|v| (v == "1" || v == "true"))
-        .unwrap_or(false);
-    let pipeline: Option<SdPipeline> = if skip_sd {
-        tracing::warn!("SKIP_SD_PIPELINE set — avatar generation disabled");
-        None
-    } else {
-        match SdPipeline::load(&config.sd_model_repo, &config.infer_url) {
-            Ok(p) => {
-                tracing::info!("Stable Diffusion pipeline ready");
-                Some(p)
-            }
-            Err(e) => {
-                tracing::error!("Failed to load SD pipeline: {e:#} — avatar generation disabled");
-                None
-            }
-        }
-    };
+    // ── Avatar pipeline (Stable Horde — free, community GPU, no key) ─────────────
+    let pipeline = StableHordePipeline::new().unwrap_or_else(|e| {
+        tracing::error!("Failed to create StableHorde pipeline: {e:#}");
+        std::process::exit(1);
+    });
 
     // ── Video pipeline ───────────────────────────────────────────────────────
     let skip_video = std::env

@@ -1,8 +1,8 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // ── Request types ────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct AvatarRequest {
     /// baby | toddler | child | teenager | young_adult | adult | middle_aged | senior | elderly
     pub age: Age,
@@ -58,7 +58,7 @@ pub struct AvatarRequest {
 
 // ── Enums ────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum Age {
     Baby,
@@ -72,14 +72,14 @@ pub enum Age {
     Elderly,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum Sex {
     Male,
     Female,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum Ethnicity {
     Caucasian,
@@ -94,7 +94,7 @@ pub enum Ethnicity {
     Mixed,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum HairColor {
     Black,
@@ -107,7 +107,7 @@ pub enum HairColor {
     StrawberryBlonde,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum HairStyle {
     Bald,
@@ -125,7 +125,7 @@ pub enum HairStyle {
     Dreadlocks,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum EyeColor {
     Brown,
@@ -136,7 +136,7 @@ pub enum EyeColor {
     Amber,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum SkinTone {
     VeryLight,
@@ -148,7 +148,7 @@ pub enum SkinTone {
     VeryDark,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum FacialHair {
     None,
@@ -159,7 +159,7 @@ pub enum FacialHair {
     LongBeard,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum Expression {
     Neutral,
@@ -171,7 +171,7 @@ pub enum Expression {
     Surprised,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Accessory {
     Glasses,
@@ -186,7 +186,7 @@ pub enum Accessory {
     Scarf,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum Background {
     White,
@@ -197,7 +197,7 @@ pub enum Background {
     Studio,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtStyle {
     Photorealistic,
@@ -209,7 +209,7 @@ pub enum ArtStyle {
     PixelArt,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageFormat {
     Png,
@@ -217,7 +217,7 @@ pub enum ImageFormat {
     Webp,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum ShotType {
     /// Tight crop: face and shoulders only (square canvas)

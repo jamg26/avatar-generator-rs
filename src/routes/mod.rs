@@ -12,7 +12,7 @@ use tower_http::{ cors::CorsLayer, trace::TraceLayer };
 
 use crate::{
     config::AppConfig,
-    generator::{ pipeline::SdPipeline, video_pipeline::VideoPipeline },
+    generator::{ stablehorde::StableHordePipeline, video_pipeline::VideoPipeline },
     middleware::{ api_key, rate_limit },
 };
 
@@ -20,20 +20,20 @@ use crate::{
 pub struct AppState {
     pub pool: PgPool,
     pub config: AppConfig,
-    pub pipeline: Option<Arc<SdPipeline>>,
+    pub pipeline: Arc<StableHordePipeline>,
     pub video_pipeline: Option<Arc<VideoPipeline>>,
 }
 
 pub fn create_router(
     pool: PgPool,
     config: AppConfig,
-    pipeline: Option<SdPipeline>,
-    video_pipeline: Option<VideoPipeline>
+    pipeline: StableHordePipeline,
+    video_pipeline: Option<VideoPipeline>,
 ) -> Router {
     let state = AppState {
         pool,
         config: config.clone(),
-        pipeline: pipeline.map(Arc::new),
+        pipeline: Arc::new(pipeline),
         video_pipeline: video_pipeline.map(Arc::new),
     };
 

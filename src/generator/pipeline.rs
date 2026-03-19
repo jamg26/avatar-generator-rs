@@ -43,7 +43,8 @@ impl SdPipeline {
         height: usize,
         num_steps: usize,
         guidance_scale: f64,
-        seed: u64
+        seed: u64,
+        traits: serde_json::Value,
     ) -> Result<DynamicImage> {
         let url = format!("{}/generate", self.infer_url);
 
@@ -56,6 +57,7 @@ impl SdPipeline {
             "num_inference_steps": num_steps,
             "guidance_scale":     guidance_scale,
             "seed":               seed,
+            "traits":             traits,
         });
 
         tracing::debug!("Calling local sidecar: POST {url} ({width}x{height}, {num_steps} steps)");

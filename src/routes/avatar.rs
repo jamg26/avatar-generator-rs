@@ -12,14 +12,15 @@ pub async fn generate(
     Extension(key): Extension<db::ApiKeyRow>,
     Json(req): Json<AvatarRequest>
 ) -> Result<Response, AppError> {
-    // Validate size and round to nearest multiple of 64 (required by FLUX for efficient inference)
-    let size_raw = req.size.unwrap_or(state.config.sd_default_size);
+    // Validate and round size to nearest multiple of 64
+    let size_raw = req.size.unwrap_or(state.config.default_size);
     if !(128..=1500).contains(&size_raw) {
         return Err(AppError::BadRequest("size must be between 128 and 1500".into()));
     }
     let size = ((size_raw + 32) / 64) * 64;
 
     // Body shots use a portrait 3:4 aspect ratio; headshots stay square.
+    // DiceBear always returns square PNGs, so we resize after the fact.
     let (width, height) = match req.shot_type {
         ShotType::Headshot => (size, size),
         ShotType::Body => {
@@ -28,31 +29,24 @@ pub async fn generate(
         }
     };
 
-    let prompt = req.to_prompt();
-    let negative = req.negative_prompt().to_string();
-    let num_steps = state.config.sd_num_steps;
-    let guidance = state.config.sd_guidance_scale;
     let seed = req.seed.unwrap_or_else(|| rand::random::<u64>());
     let format = req.format;
-    let pipeline = state.pipeline
-        .clone()
-        .ok_or_else(|| {
-            AppError::ServiceUnavailable(
-                "Avatar generation is not available: model not loaded".into()
-            )
-        })?;
 
-    tracing::info!(key_prefix = %key.key_prefix, %prompt, "Generating avatar");
+    tracing::info!(key_prefix = %key.key_prefix, ?req.sex, ?req.ethnicity, "Generating avatar");
 
-    // Call async HF Inference API — no spawn_blocking needed
-    let img = pipeline
-        .generate(&prompt, &negative, width, height, num_steps, guidance, seed).await
+    let img = state.pipeline
+        .generate(&req, width.max(height), seed).await
         .map_err(|e| AppError::Internal(format!("generation failed: {e}")))?;
 
-    // Encode to requested format
+    // Resize to requested (width × height) if width ≠ height (body shot)
+    let img = if width != height {
+        img.resize_exact(width as u32, height as u32, image::imageops::FilterType::Lanczos3)
+    } else {
+        img
+    };
+
     let (bytes, content_type) = encode_image(&img, format)?;
 
-    // Record usage
     db::record_usage(&state.pool, &key.id, "/api/v1/avatar/generate").await?;
 
     Ok(([(header::CONTENT_TYPE, content_type)], bytes).into_response())

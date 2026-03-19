@@ -1,28 +1,18 @@
-"""Local inference sidecar for AvaGen.
+"""AvaGen inference sidecar — cartoon avatar generation via py-avataaars.
 
-Runs as a subprocess inside the Docker container alongside the Rust Axum server.
-Exposes a local HTTP API on 127.0.0.1:8001.
+Generates structured avatar traits as a cartoon-style portrait PNG in <1 second.
+No ML models required — uses SVG compositing (py-avataaars + cairosvg).
 
 Endpoints:
-  GET  /health          → {"status": "ok", "mock": bool, "flux_loaded": bool, "svd_loaded": bool}
-  POST /generate        → raw PNG bytes  (SD 1.5 OpenVINO FP16, ~20 s on CPU)
-
-Environment variables:
-  MOCK_MODELS=1           Skip loading real models; return minimal stub outputs.
-  HF_HOME=/path           Override the HuggingFace model cache directory.
-  HF_TOKEN or HUGGING_FACE_HUB_TOKEN
-                          Token for downloading models from HuggingFace Hub.
-  SD_MODEL_REPO           OpenVINO SD 1.5 repo (default: OpenVINO/stable-diffusion-v1-5-fp16-ov).
+  GET  /health    → {"status": "ok", ...}
+  POST /generate  → raw PNG bytes  (<1 s, CPU-only)
 """
 from __future__ import annotations
 
-import base64
 import io
 import logging
 import os
-import threading
-from contextlib import asynccontextmanager
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -39,12 +29,6 @@ log = logging.getLogger("infer")
 # Environment setup
 # ---------------------------------------------------------------------------
 
-# Suppress tqdm progress bars — in non-TTY environments (Docker, piped logs)
-# tqdm prints the final "100%" line twice (once on completion, once on close).
-os.environ.setdefault("TQDM_DISABLE", "1")
-
-# Auto-load .env from the project root (same directory as this file) so that
-# `python infer.py` works without manually exporting env vars first.
 _env_file = os.path.join(os.path.dirname(__file__) or ".", ".env")
 if os.path.exists(_env_file):
     with open(_env_file) as _f:
@@ -54,106 +38,207 @@ if os.path.exists(_env_file):
                 _k, _, _v = _line.partition("=")
                 os.environ.setdefault(_k.strip(), _v.strip())
 
-# Accept both HF_TOKEN (project convention) and HUGGING_FACE_HUB_TOKEN (HF Hub convention).
-_hf = os.environ.get("HUGGING_FACE_HUB_TOKEN") or os.environ.get("HF_TOKEN")
-if _hf:
-    os.environ["HUGGING_FACE_HUB_TOKEN"] = _hf
-
-MOCK        = os.environ.get("MOCK_MODELS", "0") in ("1", "true", "yes")
-HF_HOME     = os.environ.get("HF_HOME",     os.path.expanduser("~/.cache/huggingface"))
-SD_MODEL    = os.environ.get("SD_MODEL_REPO", "OpenVINO/stable-diffusion-v1-5-fp16-ov")
-VIDEO_MODEL = os.environ.get("VIDEO_MODEL_REPO", "stabilityai/stable-video-diffusion-img2vid-xt")
+MOCK = os.environ.get("MOCK_MODELS", "0") in ("1", "true", "yes")
 
 # ---------------------------------------------------------------------------
-# Global model holders
+# py-avataaars trait mappings
 # ---------------------------------------------------------------------------
 
-_flux_pipe: Any = None
-_svd_pipe: Any = None
-_pipe_lock = threading.Lock()   # serialise SD pipeline calls — scheduler is not thread-safe
-_svd_lock  = threading.Lock()
+import py_avataaars as pa
+from PIL import Image
+
+SKIN_COLOR_MAP: Dict[str, Any] = {
+    "very_light":   pa.SkinColor.PALE,
+    "light":        pa.SkinColor.LIGHT,
+    "medium_light": pa.SkinColor.TANNED,
+    "medium":       pa.SkinColor.YELLOW,
+    "medium_dark":  pa.SkinColor.BROWN,
+    "dark":         pa.SkinColor.DARK_BROWN,
+    "very_dark":    pa.SkinColor.BLACK,
+}
+
+ETHNICITY_SKIN_MAP: Dict[str, Any] = {
+    "caucasian":        pa.SkinColor.LIGHT,
+    "african":          pa.SkinColor.DARK_BROWN,
+    "east_asian":       pa.SkinColor.YELLOW,
+    "south_asian":      pa.SkinColor.BROWN,
+    "southeast_asian":  pa.SkinColor.TANNED,
+    "hispanic":         pa.SkinColor.BROWN,
+    "middle_eastern":   pa.SkinColor.TANNED,
+    "native_american":  pa.SkinColor.BROWN,
+    "pacific_islander": pa.SkinColor.TANNED,
+    "mixed":            pa.SkinColor.TANNED,
+}
+
+HAIR_COLOR_MAP: Dict[str, Any] = {
+    "black":             pa.HairColor.BLACK,
+    "brown":             pa.HairColor.BROWN,
+    "blonde":            pa.HairColor.BLONDE_GOLDEN,
+    "red":               pa.HairColor.RED,
+    "gray":              pa.HairColor.SILVER_GRAY,
+    "white":             pa.HairColor.PLATINUM,
+    "auburn":            pa.HairColor.AUBURN,
+    "strawberry_blonde": pa.HairColor.BLONDE,
+}
+
+HAIR_STYLE_MAP: Dict[str, Any] = {
+    "bald":         pa.TopType.NO_HAIR,
+    "buzz_cut":     pa.TopType.SHORT_HAIR_THE_CAESAR,
+    "short":        pa.TopType.SHORT_HAIR_SHORT_ROUND,
+    "medium":       pa.TopType.SHORT_HAIR_SHORT_WAVED,
+    "long_straight": pa.TopType.LONG_HAIR_STRAIGHT,
+    "long_wavy":    pa.TopType.LONG_HAIR_CURVY,
+    "long_curly":   pa.TopType.LONG_HAIR_CURLY,
+    "afro":         pa.TopType.LONG_HAIR_FRO,
+    "braids":       pa.TopType.LONG_HAIR_DREADS,
+    "ponytail":     pa.TopType.LONG_HAIR_BOB,
+    "bun":          pa.TopType.LONG_HAIR_BUN,
+    "mohawk":       pa.TopType.SHORT_HAIR_SIDES,
+    "dreadlocks":   pa.TopType.SHORT_HAIR_DREADS_01,
+}
+
+MOUTH_MAP: Dict[str, Any] = {
+    "neutral":    pa.MouthType.SERIOUS,
+    "happy":      pa.MouthType.SMILE,
+    "serious":    pa.MouthType.DEFAULT,
+    "confident":  pa.MouthType.TWINKLE,
+    "friendly":   pa.MouthType.TONGUE,
+    "thoughtful": pa.MouthType.CONCERNED,
+    "surprised":  pa.MouthType.SCREAM_OPEN,
+}
+
+FACIAL_HAIR_MAP: Dict[str, Any] = {
+    "none":       pa.FacialHairType.DEFAULT,
+    "stubble":    pa.FacialHairType.BEARD_LIGHT,
+    "mustache":   pa.FacialHairType.MOUSTACHE_FANCY,
+    "goatee":     pa.FacialHairType.BEARD_LIGHT,
+    "full_beard": pa.FacialHairType.BEARD_MEDIUM,
+    "long_beard": pa.FacialHairType.BEARD_MAJESTIC,
+}
+
+_FHC_MAP: Dict[Any, Any] = {
+    pa.HairColor.AUBURN:        pa.FacialHairColor.AUBURN,
+    pa.HairColor.BLACK:         pa.FacialHairColor.BLACK,
+    pa.HairColor.BLONDE_GOLDEN: pa.FacialHairColor.BLONDE_GOLDEN,
+    pa.HairColor.BLONDE:        pa.FacialHairColor.BLONDE,
+    pa.HairColor.BROWN:         pa.FacialHairColor.BROWN,
+    pa.HairColor.BROWN_DARK:    pa.FacialHairColor.BROWN_DARK,
+    pa.HairColor.PASTEL_PINK:   pa.FacialHairColor.PASTEL_PINK,
+    pa.HairColor.PLATINUM:      pa.FacialHairColor.PLATINUM,
+    pa.HairColor.RED:           pa.FacialHairColor.RED,
+    pa.HairColor.SILVER_GRAY:   pa.FacialHairColor.SILVER_GRAY,
+}
+
+ACCESSORIES_MAP: Dict[str, Any] = {
+    "glasses":    pa.AccessoriesType.PRESCRIPTION_01,
+    "sunglasses": pa.AccessoriesType.SUNGLASSES,
+    "hat":        pa.AccessoriesType.KURT,
+}
+
+BACKGROUND_COLOR_MAP: Dict[str, tuple] = {
+    "white":       (255, 255, 255),
+    "gray":        (180, 180, 185),
+    "blue":        (100, 140, 200),
+    "gradient":    (210, 185, 235),
+    "nature":      (120, 170, 110),
+    "studio":      (50,  55,  70),
+    "studio_grey": (100, 100, 105),
+}
 
 # ---------------------------------------------------------------------------
-# Model loaders
+# Avatar builder
 # ---------------------------------------------------------------------------
 
-def _load_sd() -> None:
-    global _flux_pipe
-    if MOCK:
-        log.info("MOCK_MODELS=1 — SD stub active (no GPU required)")
-        _flux_pipe = "mock"
-        return
+def _build_avatar_png(traits: Dict[str, Any], out_size: int) -> bytes:
+    """Map AvaGen traits → py_avataaars SVG → composite PNG bytes in <1 s."""
+    import cairosvg
 
-    from optimum.intel import OVStableDiffusionPipeline  # type: ignore[import]
+    t = traits
 
-    log.info(f"Loading SD 1.5 OpenVINO FP16 pipeline: {SD_MODEL} …")
-    pipe = OVStableDiffusionPipeline.from_pretrained(
-        SD_MODEL,
-        safety_checker=None,
-        requires_safety_checker=False,
-        # compile=True is the default — OV compilation happens at load time
-        # so that the first inference call is fast (not blocked by compilation)
+    # Skin
+    skin_raw = t.get("skin_tone") or ""
+    skin = (
+        SKIN_COLOR_MAP.get(skin_raw)
+        or ETHNICITY_SKIN_MAP.get(t.get("ethnicity", "caucasian"), pa.SkinColor.LIGHT)
     )
-    _flux_pipe = pipe
-    log.info("Stable Diffusion 1.5 OpenVINO FP16 pipeline ready")
 
+    # Hair
+    hair_color = HAIR_COLOR_MAP.get(t.get("hair_color", "brown"), pa.HairColor.BROWN)
+    top_type   = HAIR_STYLE_MAP.get(t.get("hair_style", "medium"), pa.TopType.SHORT_HAIR_SHORT_WAVED)
 
-def _load_svd() -> None:
-    global _svd_pipe
-    if MOCK:
-        log.info("MOCK_MODELS=1 — SVD stub active (no GPU required)")
-        _svd_pipe = "mock"
-        return
+    # Mouth
+    mouth = MOUTH_MAP.get(t.get("expression", "neutral"), pa.MouthType.DEFAULT)
 
-    import torch
-    from diffusers.pipelines.stable_video_diffusion.pipeline_stable_video_diffusion import StableVideoDiffusionPipeline
+    # Facial hair
+    fh_type  = FACIAL_HAIR_MAP.get(t.get("facial_hair", "none"), pa.FacialHairType.DEFAULT)
+    fh_color = _FHC_MAP.get(hair_color, pa.FacialHairColor.BROWN)
 
-    log.info(f"Loading SVD model: {VIDEO_MODEL} …")
-    pipe = StableVideoDiffusionPipeline.from_pretrained(
-        VIDEO_MODEL,
-        torch_dtype=torch.float16,
-        variant="fp16",
-        cache_dir=os.path.join(HF_HOME, "hub"),
+    # Accessories (use first recognised one)
+    acc = pa.AccessoriesType.DEFAULT
+    for name in t.get("accessories", []):
+        if name in ACCESSORIES_MAP:
+            acc = ACCESSORIES_MAP[name]
+            break
+
+    # Clothes — simple sex-based choice
+    clothe = (
+        pa.ClotheType.OVERALL
+        if t.get("sex", "male") == "female"
+        else pa.ClotheType.SHIRT_CREW_NECK
     )
-    pipe.enable_sequential_cpu_offload()
-    pipe.enable_attention_slicing("max")
-    pipe.vae.enable_tiling()
-    pipe.vae.enable_slicing()
-    _svd_pipe = pipe
-    log.info("SVD XT pipeline ready")
+
+    avatar = pa.PyAvataaar(
+        style=pa.AvatarStyle.TRANSPARENT,
+        skin_color=skin,
+        hair_color=hair_color,
+        facial_hair_type=fh_type,
+        facial_hair_color=fh_color,
+        top_type=top_type,
+        hat_color=pa.Color.BLACK,
+        mouth_type=mouth,
+        eye_type=pa.EyeType.DEFAULT,
+        eyebrow_type=pa.EyebrowType.DEFAULT_NATURAL,
+        nose_type=pa.NoseType.DEFAULT,
+        accessories_type=acc,
+        clothe_type=clothe,
+        clothe_color=pa.Color.HEATHER,
+        clothe_graphic_type=pa.ClotheGraphicType.BAT,
+    )
+
+    # Render SVG → PNG in memory (no disk I/O)
+    png_bytes = cairosvg.svg2png(
+        bytestring=avatar._render(),
+        output_width=out_size,
+        output_height=out_size,
+    )
+
+    # Composite transparent avatar PNG on solid background
+    bg_color = BACKGROUND_COLOR_MAP.get(t.get("background", "white"), (255, 255, 255))
+    av_img   = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+    bg_img   = Image.new("RGBA", (out_size, out_size), bg_color + (255,))
+    bg_img.paste(av_img, (0, 0), av_img)
+
+    buf = io.BytesIO()
+    bg_img.convert("RGB").save(buf, format="PNG")
+    return buf.getvalue()
 
 
 # ---------------------------------------------------------------------------
-# App lifecycle
+# App + request schemas
 # ---------------------------------------------------------------------------
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    import traceback
-    try:
-        _load_sd()
-    except Exception:
-        log.error(f"FATAL: Failed to load SD pipeline:\n{traceback.format_exc()}")
-        raise
-    yield
+app = FastAPI(title="AvaGen Inference Sidecar")
 
-
-app = FastAPI(title="AvaGen Inference Sidecar", lifespan=lifespan)
-
-
-# ---------------------------------------------------------------------------
-# Request schemas
-# ---------------------------------------------------------------------------
 
 class GenerateRequest(BaseModel):
-    prompt: str
+    prompt: str = ""
     negative_prompt: str = ""
     width: int = 512
     height: int = 512
-    # SD 1.5 OpenVINO FP16: 20 steps, guidance_scale=7.5
-    num_inference_steps: int = 4   # 4 steps is fast on CPU (~20–40 s with OV)
+    num_inference_steps: int = 4
     guidance_scale: float = 7.5
     seed: int = 0
+    traits: Optional[Dict[str, Any]] = None
 
 
 class VideoGenerateRequest(BaseModel):
@@ -166,41 +251,6 @@ class VideoGenerateRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Video encoding helper
-# ---------------------------------------------------------------------------
-
-def _frames_to_mp4(frames: list, fps: int) -> bytes:
-    """Encode a list of PIL Images (or H×W×3 numpy arrays) to an in-memory MP4."""
-    import av
-    import numpy as np
-
-    buf = io.BytesIO()
-    container = av.open(buf, mode="w", format="mp4")
-
-    first = np.array(frames[0]) if not isinstance(frames[0], np.ndarray) else frames[0]
-    h, w = first.shape[:2]
-
-    stream = container.add_stream("h264", rate=fps)
-    stream.width  = w
-    stream.height = h
-    stream.pix_fmt = "yuv420p"
-    stream.options = {"crf": "23", "preset": "fast"}
-
-    for frame in frames:
-        arr = np.array(frame) if not isinstance(frame, np.ndarray) else frame
-        vf = av.VideoFrame.from_ndarray(arr, format="rgb24").reformat(format="yuv420p")
-        for pkt in stream.encode(vf):
-            container.mux(pkt)
-
-    for pkt in stream.encode():
-        container.mux(pkt)
-
-    container.close()
-    buf.seek(0)
-    return buf.read()
-
-
-# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -209,103 +259,40 @@ def health():
     return {
         "status":      "ok",
         "mock":        MOCK,
-        "flux_loaded": _flux_pipe is not None,
-        "svd_loaded":  _svd_pipe  is not None,
+        "flux_loaded": True,   # no model load needed — always ready
+        "svd_loaded":  False,
     }
 
 
 @app.post("/generate")
 def generate(req: GenerateRequest) -> Response:
-    if _flux_pipe is None:
-        raise HTTPException(503, "Model not loaded yet — retry shortly")
+    traits = req.traits or {}
 
-    if _flux_pipe == "mock":
-        from PIL import Image
+    # MOCK or no traits → plain colour stub
+    if MOCK or not traits:
         img = Image.new("RGB", (req.width, req.height), color=(40, 40, 50))
         buf = io.BytesIO()
         img.save(buf, format="PNG")
-        log.info(f"[mock] /generate {req.width}×{req.height} PNG")
+        log.info(f"[stub] /generate {req.width}×{req.height}")
         return Response(content=buf.getvalue(), media_type="image/png")
 
-    import traceback
-    import torch
-    generator = torch.Generator().manual_seed(req.seed)
-    kwargs: dict = dict(
-        prompt=req.prompt,
-        negative_prompt=req.negative_prompt or "blurry, deformed, ugly, low quality, bad anatomy",
-        width=req.width,
-        height=req.height,
-        num_inference_steps=req.num_inference_steps,
-        guidance_scale=req.guidance_scale,
-        generator=generator,
-        output_type="pil",
-    )
     try:
-        with _pipe_lock:
-            result = _flux_pipe(**kwargs)
-    except Exception as exc:
-        tb = traceback.format_exc()
-        log.error(f"Inference error:\n{tb}")
-        raise HTTPException(status_code=500, detail=tb)
-    img = result.images[0]
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    log.info(f"Generated {req.width}×{req.height} image")
-    return Response(content=buf.getvalue(), media_type="image/png")
+        out_size = max(req.width, req.height)
+        result   = _build_avatar_png(traits, out_size)
+        log.info(
+            f"Avatar rendered: {traits.get('sex','?')} "
+            f"{traits.get('ethnicity','?')} {out_size}px"
+        )
+        return Response(content=result, media_type="image/png")
+    except Exception:
+        import traceback
+        log.error(f"Avatar render error:\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail="Avatar render failed")
 
 
 @app.post("/video/generate")
-def generate_video(req: VideoGenerateRequest) -> Response:
-    # Validate inputs early before any model/GPU code so we can return 400 cleanly.
-    if not req.image_b64 and not req.image_url:
-        raise HTTPException(400, "Provide image_b64 or image_url")
-
-    global _svd_pipe
-
-    # SVD is lazy-loaded on first request to keep idle VRAM footprint low.
-    with _svd_lock:
-        if _svd_pipe is None:
-            _load_svd()
-
-    if _svd_pipe == "mock":
-        import numpy as np
-        frame = np.zeros((576, 1024, 3), dtype=np.uint8)
-        mp4 = _frames_to_mp4([frame], req.fps_id)
-        log.info("[mock] /video/generate — single black frame")
-        return Response(content=mp4, media_type="video/mp4")
-
-    from PIL import Image
-    import torch
-
-    if req.image_b64:
-        raw = base64.b64decode(req.image_b64)
-        img = Image.open(io.BytesIO(raw)).convert("RGB")
-    elif req.image_url:
-        import urllib.request
-        with urllib.request.urlopen(req.image_url, timeout=30) as resp:
-            img = Image.open(io.BytesIO(resp.read())).convert("RGB")
-    else:
-        raise HTTPException(400, "Provide image_b64 or image_url")
-
-    img = img.resize((1024, 576))  # SVD XT fixed input resolution
-    generator = torch.Generator().manual_seed(req.seed)
-
-    torch.cuda.empty_cache()
-    with torch.no_grad():
-        output = _svd_pipe(
-            img,
-            motion_bucket_id=req.motion_bucket_id,
-            noise_aug_strength=req.noise_aug_strength,
-            fps=req.fps_id,
-            generator=generator,
-            output_type="pil",
-            decode_chunk_size=2,
-        )
-
-    frames = output.frames[0]
-    mp4 = _frames_to_mp4(frames, req.fps_id)
-    log.info(f"Generated video: {len(frames)} frames @ {req.fps_id} fps")
-    return Response(content=mp4, media_type="video/mp4")
+def generate_video(_req: VideoGenerateRequest) -> Response:
+    raise HTTPException(status_code=503, detail="Video generation is not available")
 
 
 if __name__ == "__main__":

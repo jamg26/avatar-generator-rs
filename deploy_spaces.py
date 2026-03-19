@@ -63,9 +63,11 @@ def main() -> None:
 
     # ── 2. Push secrets into the Space ───────────────────────────────────────
     secrets = {
-        "DATABASE_URL": os.environ.get("DATABASE_URL") or local_env.get("DATABASE_URL"),
-        "ADMIN_SECRET": os.environ.get("ADMIN_SECRET") or local_env.get("ADMIN_SECRET"),
-        "HF_TOKEN":     hf_token,
+        "DATABASE_URL":          os.environ.get("DATABASE_URL") or local_env.get("DATABASE_URL"),
+        "ADMIN_SECRET":          os.environ.get("ADMIN_SECRET") or local_env.get("ADMIN_SECRET"),
+        "HF_TOKEN":              hf_token,
+        "REPLICATE_API_TOKEN":   os.environ.get("REPLICATE_API_TOKEN") or local_env.get("REPLICATE_API_TOKEN"),
+        "STABLE_HORDE_KEY":      os.environ.get("STABLE_HORDE_KEY") or local_env.get("STABLE_HORDE_KEY"),
     }
     for key, value in secrets.items():
         if value:
@@ -87,9 +89,6 @@ def main() -> None:
         shutil.copy(REPO_ROOT / "Dockerfile", tmp / "Dockerfile")
         shutil.copy(REPO_ROOT / "start.sh",   tmp / "start.sh")
 
-        # Python inference sidecar
-        shutil.copy(REPO_ROOT / "infer.py", tmp / "infer.py")
-
         # Rust build files
         shutil.copy(REPO_ROOT / "Cargo.toml", tmp / "Cargo.toml")
         shutil.copy(REPO_ROOT / "Cargo.lock", tmp / "Cargo.lock")
@@ -105,16 +104,16 @@ def main() -> None:
         )
 
     # ── 4. Hardware tier ──────────────────────────────────────────────────────
-    # SD 1.5 OpenVINO FP16 weights (~3.2 GB) fit comfortably in cpu-basic (16 GB).
-    # No paid hardware upgrade needed.
-    print("  Hardware: cpu-basic (16 GB RAM) — SD 1.5 fits within free tier")
+    # Pure Rust binary + DiceBear CDN calls — no GPU or large RAM needed.
+    # cpu-basic (2 vCPU, 16 GB) is more than enough.
+    print("  Hardware: cpu-basic — pure Rust binary, no ML models")
 
     space_url = f"https://huggingface.co/spaces/{SPACE_ID}"
     api_url   = "https://jamg-avagen.hf.space"
     print(f"\n✓ Deployed!")
     print(f"  Space:  {space_url}")
     print(f"  API:    {api_url}")
-    print(f"\nThe Space is now building (Rust compile + ~5 min).")
+    print(f"\nThe Space is now building (Rust compile ~2 min).")
     print(f"Monitor: {space_url}\n")
     print("When the build finishes, run the integration tests:")
     print(f"  BASE={api_url} ADMIN_SECRET=<your-secret> ./test.sh")
