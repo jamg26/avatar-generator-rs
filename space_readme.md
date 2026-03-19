@@ -6,15 +6,16 @@ colorTo: purple
 sdk: docker
 pinned: false
 app_port: 7860
+hardware: cpu-basic
 license: mit
-short_description: AI avatar API — LCM_Dreamshaper_v7, Rust/Axum
+short_description: AI avatar API — SD 1.5 OpenVINO FP16, Rust/Axum
 ---
 
 # AvaGen — AI Avatar Generation API
 
 REST API that generates photorealistic AI avatar portraits from structured
-demographic descriptions. Built with **Rust/Axum** + a **Python LCM_Dreamshaper_v7
-inference sidecar**, deployed on HuggingFace Spaces (CPU, no GPU required).
+demographic descriptions. Built with **Rust/Axum** + a **Python SD 1.5
+OpenVINO FP16 inference sidecar**, deployed on HuggingFace Spaces (CPU, no GPU required).
 
 ## Setup — Space Secrets
 
@@ -82,8 +83,8 @@ HF Space container
 ├── Rust/Axum server  :7860  ← public HTTPS traffic
 │     auth, rate-limiting, DB, routing
 └── Python sidecar    :8001  ← localhost only
-      LCM_Dreamshaper_v7 inference (~10-20 s/image on CPU, 4-step LCM)
+      SD 1.5 OpenVINO FP16 (~20 s/image on CPU, 20-step, AVX-512 accelerated)
 ```
 
-Model weights (~2 GB) are baked into the Docker image — cold starts load
-from disk in ~10 s without any network download.
+OpenVINO FP16 weights are downloaded on first startup and cached.
+~20 s per image at 512×512 using CPU AI instructions (AVX-512) — no GPU needed.

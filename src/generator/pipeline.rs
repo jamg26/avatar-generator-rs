@@ -20,7 +20,7 @@ impl SdPipeline {
     /// `infer_url` is typically `http://localhost:8001`.
     pub fn load(model_repo: &str, infer_url: &str) -> Result<Self> {
         let client = Client::builder()
-            .timeout(Duration::from_secs(300))
+            .timeout(Duration::from_secs(600))
             .build()
             .context("Failed to build HTTP client")?;
 

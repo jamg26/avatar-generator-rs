@@ -31,28 +31,20 @@ RUN pip install --no-cache-dir \
 
 # Inference + sidecar API stack
 RUN pip install --no-cache-dir \
-    "diffusers>=0.27" \
+    "diffusers>=0.31" \
     "transformers>=4.39" \
     "accelerate>=0.27" \
+    "optimum-intel[openvino]" \
     fastapi \
     "uvicorn[standard]" \
     pydantic \
     Pillow \
-    sentencepiece \
     protobuf \
     huggingface_hub
 
-# Pre-download LCM_Dreamshaper_v7 weights into this image layer so cold starts are fast
-# (~2 GB public model; LCM-distilled SD1.5, 4-step inference, good face quality)
+# FLUX.1-schnell OpenVINO INT4 weights are downloaded at first startup and cached.
+# ~5 s per image on CPU using AVX-512 / OpenVINO acceleration.
 ENV HF_HOME=/app/model_cache
-RUN python3 -c "\
-import torch; \
-from diffusers import AutoPipelineForText2Image; \
-AutoPipelineForText2Image.from_pretrained( \
-    'SimianLuo/LCM_Dreamshaper_v7', \
-    torch_dtype=torch.float32, \
-    cache_dir='/app/model_cache/hub' \
-)"
 
 # Copy Rust binary from the builder stage
 COPY --from=builder /build/target/release/avagen ./avagen
@@ -70,10 +62,9 @@ RUN chmod +x ./start.sh
 ENV PORT=7860 \
     RUST_LOG=avagen=info,tower_http=info \
     HF_HOME=/app/model_cache \
-    SD_MODEL_REPO=SimianLuo/LCM_Dreamshaper_v7 \
-    SD_NUM_STEPS=4 \
-    SD_GUIDANCE_SCALE=8.0 \
-    SD_USE_LCM=1 \
+    SD_MODEL_REPO=OpenVINO/stable-diffusion-v1-5-fp16-ov \
+    SD_NUM_STEPS=20 \
+    SD_GUIDANCE_SCALE=7.5 \
     SD_DEFAULT_SIZE=512 \
     SKIP_VIDEO_PIPELINE=1
 

@@ -104,6 +104,11 @@ def main() -> None:
             commit_message="Deploy AvaGen",
         )
 
+    # ── 4. Hardware tier ──────────────────────────────────────────────────────
+    # SD 1.5 OpenVINO FP16 weights (~3.2 GB) fit comfortably in cpu-basic (16 GB).
+    # No paid hardware upgrade needed.
+    print("  Hardware: cpu-basic (16 GB RAM) — SD 1.5 fits within free tier")
+
     space_url = f"https://huggingface.co/spaces/{SPACE_ID}"
     api_url   = "https://jamg-avagen.hf.space"
     print(f"\n✓ Deployed!")

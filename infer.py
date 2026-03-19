@@ -1,18 +1,18 @@
 """Local inference sidecar for AvaGen.
 
-Runs as a subprocess inside the Modal container (or locally) alongside the
-Rust Axum server. Exposes a local HTTP API on 127.0.0.1:8001.
+Runs as a subprocess inside the Docker container alongside the Rust Axum server.
+Exposes a local HTTP API on 127.0.0.1:8001.
 
 Endpoints:
   GET  /health          → {"status": "ok", "mock": bool, "flux_loaded": bool, "svd_loaded": bool}
-  POST /generate        → raw PNG bytes  (FLUX.1-schnell OpenVINO INT4, ~5 s on CPU)
+  POST /generate        → raw PNG bytes  (SD 1.5 OpenVINO FP16, ~20 s on CPU)
 
 Environment variables:
   MOCK_MODELS=1           Skip loading real models; return minimal stub outputs.
   HF_HOME=/path           Override the HuggingFace model cache directory.
   HF_TOKEN or HUGGING_FACE_HUB_TOKEN
                           Token for downloading models from HuggingFace Hub.
-  SD_MODEL_REPO           OpenVINO INT4 FLUX repo (default: rupeshs/FLUX.1-schnell-openvino-int4).
+  SD_MODEL_REPO           OpenVINO SD 1.5 repo (default: OpenVINO/stable-diffusion-v1-5-fp16-ov).
 """
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ if _hf:
 
 MOCK        = os.environ.get("MOCK_MODELS", "0") in ("1", "true", "yes")
 HF_HOME     = os.environ.get("HF_HOME",     os.path.expanduser("~/.cache/huggingface"))
-SD_MODEL    = os.environ.get("SD_MODEL_REPO", "rupeshs/FLUX.1-schnell-openvino-int4")
+SD_MODEL    = os.environ.get("SD_MODEL_REPO", "OpenVINO/stable-diffusion-v1-5-fp16-ov")
 VIDEO_MODEL = os.environ.get("VIDEO_MODEL_REPO", "stabilityai/stable-video-diffusion-img2vid-xt")
 
 # ---------------------------------------------------------------------------
@@ -77,152 +77,25 @@ _svd_lock  = threading.Lock()
 # Model loaders
 # ---------------------------------------------------------------------------
 
-def _ensure_ov_symlinks(local_dir: str) -> None:
-    """rupeshs/FLUX.1-schnell-openvino-int4 uses non-standard OV filenames.
-
-    OVFluxPipeline._search_pattern = r'(.*)?openvino(.*)?_(.*)?.xml$' so it only
-    recognises files containing 'openvino_' in the name.  Standard components ship
-    as <name>/<name>.xml; the VAE lives in vae/vae_decoder.xml instead of the
-    expected vae_decoder/openvino_model.xml.  Create symlinks once.
-    """
-    import shutil
-
-    # transformer / text_encoder / text_encoder_2
-    for comp in ("transformer", "text_encoder", "text_encoder_2"):
-        comp_dir = os.path.join(local_dir, comp)
-        for ext in (".xml", ".bin"):
-            src = os.path.join(comp_dir, f"{comp}{ext}")
-            dst = os.path.join(comp_dir, f"openvino_model{ext}")
-            if os.path.exists(src) and not os.path.exists(dst):
-                os.symlink(src, dst)
-
-    # vae_decoder: rupeshs puts it in vae/vae_decoder.{xml,bin}
-    # OVFluxPipeline expects vae_decoder/openvino_model.{xml,bin}
-    vae_decoder_dir = os.path.join(local_dir, "vae_decoder")
-    os.makedirs(vae_decoder_dir, exist_ok=True)
-    for ext in (".xml", ".bin"):
-        src = os.path.join(local_dir, "vae", f"vae_decoder{ext}")
-        dst = os.path.join(vae_decoder_dir, f"openvino_model{ext}")
-        if os.path.exists(src) and not os.path.exists(dst):
-            os.symlink(src, dst)
-    # config.json in vae_decoder/ so the pipeline can read model metadata
-    vae_cfg_src = os.path.join(local_dir, "vae", "config.json")
-    vae_cfg_dst = os.path.join(vae_decoder_dir, "config.json")
-    if os.path.exists(vae_cfg_src) and not os.path.exists(vae_cfg_dst):
-        shutil.copy2(vae_cfg_src, vae_cfg_dst)
-
-
-def _patch_ov_text_encoder() -> None:
-    """Fix OVModelTextEncoder.forward for unnamed OV output tensors.
-
-    The rupeshs INT4 CLIP text_encoder model exports some outputs without tensor
-    names. optimum-intel's forward calls output.get_any_name() unconditionally,
-    raising RuntimeError. Monkey-patch the class with a safe version.
-    """
-    import torch
-    from transformers.utils import ModelOutput
-    from optimum.intel.openvino.modeling_diffusion import OVModelTextEncoder
-
-    def _safe_forward(
-        self,
-        input_ids,
-        attention_mask=None,
-        output_hidden_states=None,
-        return_dict=False,
-    ):
-        def _name(out):
-            try:
-                return out.get_any_name()
-            except RuntimeError:
-                return ""
-
-        self.compile()
-        model_inputs = {"input_ids": input_ids}
-        if "attention_mask" in self.input_names:
-            model_inputs["attention_mask"] = attention_mask
-
-        ov_outputs = self.request(model_inputs, share_inputs=True)
-        model_outputs = {}
-
-        name0 = _name(self.model.outputs[0])
-        model_outputs[name0 or "last_hidden_state"] = torch.from_numpy(ov_outputs[0])
-
-        if len(self.model.outputs) > 1:
-            name1 = _name(self.model.outputs[1])
-            # When output has no name (rupeshs INT4 CLIP), assume standard CLIP
-            # convention: outputs = [last_hidden_state, pooler_output].
-            if "pooler_output" in name1 or not name1:
-                model_outputs["pooler_output"] = torch.from_numpy(ov_outputs[1])
-
-        if self.hidden_states_output_names and "last_hidden_state" not in model_outputs:
-            model_outputs["last_hidden_state"] = torch.from_numpy(
-                ov_outputs[self.hidden_states_output_names[-1]]
-            )
-        if (
-            self.hidden_states_output_names
-            and output_hidden_states
-            or getattr(self.config, "output_hidden_states", False)
-        ):
-            model_outputs["hidden_states"] = [
-                torch.from_numpy(ov_outputs[n]) for n in self.hidden_states_output_names
-            ]
-
-        if return_dict:
-            return model_outputs
-        return ModelOutput(**model_outputs)
-
-    OVModelTextEncoder.forward = _safe_forward
-
-
-def _load_flux() -> None:
+def _load_sd() -> None:
     global _flux_pipe
     if MOCK:
         log.info("MOCK_MODELS=1 — SD stub active (no GPU required)")
         _flux_pipe = "mock"
         return
 
-    import json
-    from huggingface_hub import snapshot_download
-    from optimum.intel import OVFluxPipeline  # type: ignore[import]
+    from optimum.intel import OVStableDiffusionPipeline  # type: ignore[import]
 
-    cache_dir = os.path.join(HF_HOME, "hub")
-    log.info(f"Downloading FLUX.1-schnell OpenVINO INT4 weights: {SD_MODEL} …")
-    local_dir = snapshot_download(SD_MODEL, cache_dir=cache_dir)
-
-    # ── Fix 1: inject model_index.json (repo ships none; breaks library detect) ──
-    model_index_path = os.path.join(local_dir, "model_index.json")
-    if not os.path.exists(model_index_path):
-        log.info("Writing model_index.json to local snapshot …")
-        model_index = {
-            "_class_name": "FluxPipeline",
-            "_diffusers_version": "0.30.0",
-            "scheduler":      ["diffusers",    "FlowMatchEulerDiscreteScheduler"],
-            "text_encoder":   ["transformers", "CLIPTextModel"],
-            "text_encoder_2": ["transformers", "T5EncoderModel"],
-            "tokenizer":      ["transformers", "CLIPTokenizer"],
-            "tokenizer_2":    ["transformers", "T5TokenizerFast"],
-            "transformer":    ["diffusers",    "FluxTransformer2DModel"],
-            # Note: no "vae" key — OVFluxPipeline loads vae_decoder via
-            # _all_ov_model_paths, not model_index.json.
-        }
-        with open(model_index_path, "w") as f:
-            json.dump(model_index, f, indent=2)
-
-    # ── Fix 2: create openvino_model.xml symlinks ─────────────────────────────
-    # OVFluxPipeline._search_pattern requires "openvino_*.xml" filenames but this
-    # repo uses "transformer/transformer.xml", "text_encoder/text_encoder.xml", etc.
-    # OVFluxPipeline._all_ov_model_paths also expects "vae_decoder/openvino_model.xml",
-    # not "vae/vae_decoder.xml".  Create symlinks once so optimum finds everything.
-    _ensure_ov_symlinks(local_dir)
-    _patch_ov_text_encoder()  # Fix 3: handle unnamed OV output tensors
-
-    log.info(f"Loading pipeline from: {local_dir}")
-    # dynamic_shapes=False: rupeshs INT4 model has static shapes baked in;
-    # dynamic reshape (the default) tries to set shape[1] on 1-D inputs → RuntimeError.
-    pipe = OVFluxPipeline.from_pretrained(local_dir, dynamic_shapes=False)
-
+    log.info(f"Loading SD 1.5 OpenVINO FP16 pipeline: {SD_MODEL} …")
+    pipe = OVStableDiffusionPipeline.from_pretrained(
+        SD_MODEL,
+        safety_checker=None,
+        requires_safety_checker=False,
+        # compile=True is the default — OV compilation happens at load time
+        # so that the first inference call is fast (not blocked by compilation)
+    )
     _flux_pipe = pipe
-    log.info("FLUX.1-schnell OpenVINO INT4 pipeline ready")
+    log.info("Stable Diffusion 1.5 OpenVINO FP16 pipeline ready")
 
 
 def _load_svd() -> None:
@@ -258,9 +131,9 @@ def _load_svd() -> None:
 async def lifespan(app: FastAPI):
     import traceback
     try:
-        _load_flux()
+        _load_sd()
     except Exception:
-        log.error(f"FATAL: Failed to load FLUX pipeline:\n{traceback.format_exc()}")
+        log.error(f"FATAL: Failed to load SD pipeline:\n{traceback.format_exc()}")
         raise
     yield
 
@@ -277,9 +150,9 @@ class GenerateRequest(BaseModel):
     negative_prompt: str = ""
     width: int = 512
     height: int = 512
-    # FLUX.1-schnell OpenVINO INT4: 2 steps, guidance_scale=1.0
-    num_inference_steps: int = 2
-    guidance_scale: float = 1.0
+    # SD 1.5 OpenVINO FP16: 20 steps, guidance_scale=7.5
+    num_inference_steps: int = 4   # 4 steps is fast on CPU (~20–40 s with OV)
+    guidance_scale: float = 7.5
     seed: int = 0
 
 
@@ -357,9 +230,9 @@ def generate(req: GenerateRequest) -> Response:
     import traceback
     import torch
     generator = torch.Generator().manual_seed(req.seed)
-    # FLUX does not use negative_prompt
     kwargs: dict = dict(
         prompt=req.prompt,
+        negative_prompt=req.negative_prompt or "blurry, deformed, ugly, low quality, bad anatomy",
         width=req.width,
         height=req.height,
         num_inference_steps=req.num_inference_steps,

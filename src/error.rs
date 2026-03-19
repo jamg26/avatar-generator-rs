@@ -27,7 +27,7 @@ impl IntoResponse for AppError {
             Self::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg),
             Self::Internal(msg) => {
                 tracing::error!("Internal error: {msg}");
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".into())
+                (StatusCode::INTERNAL_SERVER_ERROR, msg)
             }
         };
 
