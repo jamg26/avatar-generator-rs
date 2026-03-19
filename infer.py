@@ -61,7 +61,8 @@ if _hf:
 
 MOCK        = os.environ.get("MOCK_MODELS", "0") in ("1", "true", "yes")
 HF_HOME     = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
-SD_MODEL    = os.environ.get("SD_MODEL_REPO",    "stabilityai/sd-turbo")
+SD_MODEL    = os.environ.get("SD_MODEL_REPO",    "SimianLuo/LCM_Dreamshaper_v7")
+SD_USE_LCM  = os.environ.get("SD_USE_LCM",       "1") in ("1", "true", "yes")
 VIDEO_MODEL = os.environ.get("VIDEO_MODEL_REPO", "stabilityai/stable-video-diffusion-img2vid-xt")
 
 # ---------------------------------------------------------------------------
@@ -108,6 +109,11 @@ def _load_flux() -> None:
             pipe.vae.enable_slicing()
     else:
         pipe = pipe.to(device)
+
+    if SD_USE_LCM:
+        from diffusers import LCMScheduler
+        pipe.scheduler = LCMScheduler.from_config(pipe.scheduler.config)
+        log.info("LCMScheduler applied (4-step CFG mode)")
 
     _flux_pipe = pipe
     log.info(f"Pipeline ready on {device}")
@@ -160,9 +166,9 @@ class GenerateRequest(BaseModel):
     negative_prompt: str = ""
     width: int = 1024
     height: int = 1024
-    # FLUX.1-schnell is optimised for 4 steps; guidance_scale=0.0 (distilled, no CFG)
+    # LCM_Dreamshaper: 4 steps with standard CFG guidance
     num_inference_steps: int = 4
-    guidance_scale: float = 0.0
+    guidance_scale: float = 8.0
     seed: int = 0
 
 

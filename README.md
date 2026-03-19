@@ -1,16 +1,16 @@
 # AvaGen — AI Avatar Generation API
 
-Serverless micro-SaaS API for generating AI avatar images from structured demographic descriptions. Built with Rust/Axum, backed by PostgreSQL, and powered by a local [sd-turbo](https://huggingface.co/stabilityai/sd-turbo) inference sidecar.
+Serverless micro-SaaS API for generating AI avatar images from structured demographic descriptions. Built with Rust/Axum, backed by PostgreSQL, and powered by a local [LCM_Dreamshaper_v7](https://huggingface.co/SimianLuo/LCM_Dreamshaper_v7) inference sidecar.
 
 ## Architecture
 
-| Layer         | Technology                                                                                     |
-| ------------- | ---------------------------------------------------------------------------------------------- |
-| Web framework | [Axum](https://github.com/tokio-rs/axum) (Rust)                                                |
-| Database      | PostgreSQL ([NeonDB](https://neon.tech) — serverless, free tier available)                     |
-| Image model   | [sd-turbo](https://huggingface.co/stabilityai/sd-turbo) — local sidecar, 1-step, ~3–5 s on CPU |
-| Deployment    | [HuggingFace Spaces](https://huggingface.co/spaces/jamg/avagen) — Docker, CPU-only, public     |
-| Auth          | API key (SHA-256 hashed, stored in DB)                                                         |
+| Layer         | Technology                                                                                          |
+| ------------- | --------------------------------------------------------------------------------------------------- |
+| Web framework | [Axum](https://github.com/tokio-rs/axum) (Rust)                                                     |
+| Database      | PostgreSQL ([NeonDB](https://neon.tech) — serverless, free tier available)                          |
+| Image model   | [LCM_Dreamshaper_v7](https://huggingface.co/SimianLuo/LCM_Dreamshaper_v7) — LCM-distilled SD 1.5, 4-step, ~2 GB, excellent face quality |
+| Deployment    | [HuggingFace Spaces](https://huggingface.co/spaces/jamg/avagen) — Docker, CPU-only, public         |
+| Auth          | API key (SHA-256 hashed, stored in DB)                                                              |
 
 The Rust server handles routing, auth, rate-limiting, and DB — it proxies generation
 requests to a Python sidecar (`infer.py`) running on `localhost:8001`. The sidecar
@@ -34,7 +34,7 @@ cp .env.example .env
 python -m venv .venv && source .venv/bin/activate
 pip install diffusers transformers accelerate torch Pillow fastapi uvicorn pydantic
 
-# 3. Start the inference sidecar (downloads ~2.5 GB model on first run)
+# 3. Start the inference sidecar (downloads ~2 GB model on first run)
 python infer.py
 # Wait for: "Pipeline ready on cpu" before proceeding
 
@@ -88,7 +88,7 @@ This will:
 2. Push three secrets into the Space (`DATABASE_URL`, `ADMIN_SECRET`, `HF_TOKEN`)
 3. Upload all source files and trigger a Docker build (~5 min for Rust + model download)
 
-The sd-turbo model (~2.5 GB) is **baked into the Docker image** at build time, so cold
+The LCM_Dreamshaper_v7 model (~2 GB) is **baked into the Docker image** at build time, so cold
 starts are fast — the sidecar loads from disk in ~10 s rather than re-downloading.
 
 The Space is publicly accessible at `https://jamg-avagen.hf.space`.
@@ -142,6 +142,9 @@ The Space is publicly accessible at `https://jamg-avagen.hf.space`.
   "format": "png", // png | jpeg | webp
   "size": 512, // integer, 128–1500 — rounded to nearest multiple of 64 (default: 512)
   "seed": 42, // optional — use for reproducible results
+  "shot_type": "headshot", // headshot (default) | body
+  // headshot → square canvas (e.g. 512×512), tight face+shoulders crop
+  // body     → portrait 3:4 canvas (e.g. 512×682), half-body centered
 }
 ```
 
@@ -161,9 +164,10 @@ The Space is publicly accessible at `https://jamg-avagen.hf.space`.
 | `DATABASE_URL`          | _(required)_                  | PostgreSQL connection string                              |
 | `ADMIN_SECRET`          | _(required)_                  | Secret for admin endpoints                                |
 | `HF_TOKEN`              | _(required)_                  | HuggingFace token for downloading model weights           |
-| `SD_MODEL_REPO`         | `stabilityai/sd-turbo`        | HuggingFace model repo                                    |
-| `SD_NUM_STEPS`          | `1`                           | Inference steps (1 is optimal for sd-turbo)               |
-| `SD_GUIDANCE_SCALE`     | `0.0`                         | Classifier-free guidance scale (0.0 for distilled models) |
+| `SD_MODEL_REPO`         | `SimianLuo/LCM_Dreamshaper_v7` | HuggingFace model repo                                   |
+| `SD_NUM_STEPS`          | `4`                           | Inference steps (4 is optimal for LCM)                    |
+| `SD_GUIDANCE_SCALE`     | `8.0`                         | Classifier-free guidance scale                            |
+| `SD_USE_LCM`            | `1`                           | Apply LCMScheduler automatically                          |
 | `SD_DEFAULT_SIZE`       | `512`                         | Default output size in pixels                             |
 | `SKIP_SD_PIPELINE`      | `0`                           | Set to `1` to disable avatar generation (503)             |
 | `HF_HOME`               | `~/.cache/huggingface`        | Local model weight cache directory                        |

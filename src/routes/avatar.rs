@@ -2,7 +2,7 @@ use std::io::Cursor;
 
 use axum::{ extract::State, http::header, response::{ IntoResponse, Response }, Extension, Json };
 
-use crate::{ db, error::AppError, generator::prompt::AvatarRequest, routes::AppState };
+use crate::{ db, error::AppError, generator::prompt::{ AvatarRequest, ShotType }, routes::AppState };
 
 /// POST /api/v1/avatar/generate
 ///
@@ -18,6 +18,15 @@ pub async fn generate(
         return Err(AppError::BadRequest("size must be between 128 and 1500".into()));
     }
     let size = ((size_raw + 32) / 64) * 64;
+
+    // Body shots use a portrait 3:4 aspect ratio; headshots stay square.
+    let (width, height) = match req.shot_type {
+        ShotType::Headshot => (size, size),
+        ShotType::Body => {
+            let h = ((size_raw * 4 / 3) + 32) / 64 * 64;
+            (size, h)
+        }
+    };
 
     let prompt = req.to_prompt();
     let negative = req.negative_prompt().to_string();
@@ -37,7 +46,7 @@ pub async fn generate(
 
     // Call async HF Inference API — no spawn_blocking needed
     let img = pipeline
-        .generate(&prompt, &negative, size, size, num_steps, guidance, seed).await
+        .generate(&prompt, &negative, width, height, num_steps, guidance, seed).await
         .map_err(|e| AppError::Internal(format!("generation failed: {e}")))?;
 
     // Encode to requested format

@@ -49,6 +49,11 @@ pub struct AvatarRequest {
     /// Optional seed for reproducible output
     #[serde(default)]
     pub seed: Option<u64>,
+    /// headshot | body  (default: headshot)
+    /// headshot = tight face+shoulders crop (square canvas)
+    /// body     = half-body shot (portrait 3:4 canvas)
+    #[serde(default = "default_shot_type")]
+    pub shot_type: ShotType,
 }
 
 // ── Enums ────────────────────────────────────────────────────────────────────
@@ -212,6 +217,15 @@ pub enum ImageFormat {
     Webp,
 }
 
+#[derive(Debug, Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum ShotType {
+    /// Tight crop: face and shoulders only (square canvas)
+    Headshot,
+    /// Half-body or full-body shot (portrait 3:4 canvas)
+    Body,
+}
+
 // ── Defaults ─────────────────────────────────────────────────────────────────
 
 fn default_hair_color() -> HairColor {
@@ -238,6 +252,9 @@ fn default_style() -> ArtStyle {
 fn default_format() -> ImageFormat {
     ImageFormat::Png
 }
+fn default_shot_type() -> ShotType {
+    ShotType::Headshot
+}
 
 // ── Prompt builder ───────────────────────────────────────────────────────────
 
@@ -246,8 +263,8 @@ impl AvatarRequest {
     pub fn to_prompt(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
 
-        // Style prefix
-        parts.push(self.style_prefix().into());
+        // Style + framing prefix (shot-type aware)
+        parts.push(self.framing_prefix().into());
 
         // Subject: age + ethnicity + sex
         parts.push(format!("of {} {} {}", self.age_text(), self.ethnicity_text(), self.sex_text()));
@@ -299,14 +316,43 @@ impl AvatarRequest {
         "ugly, deformed, disfigured, blurry, bad anatomy, extra limbs, mutated, \
          duplicate, morbid, mutilated, poorly drawn face, extra fingers, fused fingers, \
          too many fingers, long neck, watermark, text, signature, logo, banner, \
-         low quality, worst quality, normal quality, jpeg artifacts, cropped"
+         low quality, worst quality, normal quality, jpeg artifacts, cropped, \
+         asymmetrical eyes, crossed eyes, lazy eye, misaligned eyes, uneven eyes, \
+         wall-eyed, off-center eyes, different sized pupils, \
+         out of frame, cropped face, partial face, face cut off, face out of frame, \
+         head cut off, decapitated, off-center subject, subject not centered"
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────
 
+    /// Shot-type-aware framing + style prefix.
+    fn framing_prefix(&self) -> &str {
+        match (&self.style, &self.shot_type) {
+            (ArtStyle::Photorealistic, ShotType::Headshot) =>
+                "A photorealistic professional headshot portrait photograph, \
+                 face and shoulders, centered composition, face centered in frame",
+            (ArtStyle::Photorealistic, ShotType::Body) =>
+                "A photorealistic professional portrait photograph, \
+                 half-body shot, subject centered in frame, centered composition",
+            (ArtStyle::DigitalArt, ShotType::Headshot) =>
+                "A high-quality digital art headshot portrait, face centered in frame",
+            (ArtStyle::DigitalArt, ShotType::Body) =>
+                "A high-quality digital art portrait, half-body shot, subject centered",
+            (ArtStyle::Anime, ShotType::Headshot) =>
+                "An anime-style headshot portrait illustration, face centered",
+            (ArtStyle::Anime, ShotType::Body) =>
+                "An anime-style portrait illustration, half-body, subject centered",
+            (ArtStyle::Cartoon, ShotType::Headshot) =>
+                "A cartoon-style headshot portrait, face centered in frame",
+            (ArtStyle::Cartoon, ShotType::Body) =>
+                "A cartoon-style portrait illustration, half-body, subject centered",
+            _ => self.style_prefix(),
+        }
+    }
+
     fn style_prefix(&self) -> &str {
         match self.style {
-            ArtStyle::Photorealistic => { "A photorealistic professional portrait photograph" }
+            ArtStyle::Photorealistic => "A photorealistic professional portrait photograph",
             ArtStyle::DigitalArt => "A high-quality digital art portrait",
             ArtStyle::Anime => "An anime-style portrait illustration",
             ArtStyle::Cartoon => "A cartoon-style portrait illustration",
@@ -431,16 +477,21 @@ impl AvatarRequest {
     }
 
     fn quality_suffix(&self) -> &str {
-        match self.style {
-            ArtStyle::Photorealistic => {
-                "highly detailed, sharp focus, 8k, professional headshot, studio lighting"
-            }
-            ArtStyle::DigitalArt => "trending on artstation, highly detailed, smooth",
-            ArtStyle::Anime => "detailed anime style, clean lines, vibrant colors",
-            ArtStyle::Cartoon => "clean vector style, bold outlines, vibrant",
-            ArtStyle::Watercolor => "soft brush strokes, flowing colors, artistic",
-            ArtStyle::OilPainting => "rich oil textures, dramatic lighting, classical",
-            ArtStyle::PixelArt => "retro pixel art, 16-bit style, clean pixels",
+        match (&self.style, &self.shot_type) {
+            (ArtStyle::Photorealistic, ShotType::Headshot) =>
+                "highly detailed, sharp focus, professional headshot, studio lighting, \
+                 perfect facial features, even lighting",
+            (ArtStyle::Photorealistic, ShotType::Body) =>
+                "highly detailed, sharp focus, professional portrait, studio lighting, \
+                 full body visible, perfect proportions",
+            (ArtStyle::Photorealistic, _) =>
+                "highly detailed, sharp focus, professional headshot, studio lighting",
+            (ArtStyle::DigitalArt, _) => "trending on artstation, highly detailed, smooth",
+            (ArtStyle::Anime, _) => "detailed anime style, clean lines, vibrant colors",
+            (ArtStyle::Cartoon, _) => "clean vector style, bold outlines, vibrant",
+            (ArtStyle::Watercolor, _) => "soft brush strokes, flowing colors, artistic",
+            (ArtStyle::OilPainting, _) => "rich oil textures, dramatic lighting, classical",
+            (ArtStyle::PixelArt, _) => "retro pixel art, 16-bit style, clean pixels",
         }
     }
 }

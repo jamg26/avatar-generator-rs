@@ -7,13 +7,13 @@ sdk: docker
 pinned: false
 app_port: 7860
 license: mit
-short_description: AI avatar generation API — sd-turbo, Rust/Axum, CPU
+short_description: AI avatar generation API — LCM_Dreamshaper_v7, Rust/Axum, CPU
 ---
 
 # AvaGen — AI Avatar Generation API
 
 REST API that generates photorealistic AI avatar portraits from structured
-demographic descriptions. Built with **Rust/Axum** + a **Python sd-turbo
+demographic descriptions. Built with **Rust/Axum** + a **Python LCM_Dreamshaper_v7
 inference sidecar**, deployed on HuggingFace Spaces (CPU, no GPU required).
 
 ## Setup — Space Secrets
@@ -51,7 +51,7 @@ curl -X POST https://jamg-avagen.hf.space/api/v1/avatar/generate \
   }' --output avatar.png
 ```
 
-Returns a **512×512 PNG**. Generation takes ~3–5 s on CPU.
+Returns a PNG image. `headshot` (default) produces a **512×512** square; `body` produces a **512×682** portrait. Generation takes ~10–20 s on CPU.
 
 ### Avatar parameters
 
@@ -66,6 +66,7 @@ Returns a **512×512 PNG**. Generation takes ~3–5 s on CPU.
 | `style`      | `photorealistic` `digital_art` `anime` `cartoon` …                               |
 | `size`       | integer 128–1500 (default `512`)                                                 |
 | `seed`       | integer (optional, for reproducible results)                                     |
+| `shot_type`  | `headshot` (default) `body` — square crop vs portrait 3:4 canvas                 |
 
 ### Check usage
 
@@ -81,8 +82,8 @@ HF Space container
 ├── Rust/Axum server  :7860  ← public HTTPS traffic
 │     auth, rate-limiting, DB, routing
 └── Python sidecar    :8001  ← localhost only
-      sd-turbo inference (~3-5 s/image on CPU)
+      LCM_Dreamshaper_v7 inference (~10-20 s/image on CPU, 4-step LCM)
 ```
 
-Model weights (~2.5 GB) are baked into the Docker image — cold starts load
-from disk in ~5–10 s without any network download.
+Model weights (~2 GB) are baked into the Docker image — cold starts load
+from disk in ~10 s without any network download.

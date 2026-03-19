@@ -42,14 +42,14 @@ RUN pip install --no-cache-dir \
     protobuf \
     huggingface_hub
 
-# Pre-download sd-turbo weights into this image layer so cold starts are fast
-# (model is ~2.5 GB; no HF token required — it's a public model)
+# Pre-download LCM_Dreamshaper_v7 weights into this image layer so cold starts are fast
+# (~2 GB public model; LCM-distilled SD1.5, 4-step inference, good face quality)
 ENV HF_HOME=/app/model_cache
 RUN python3 -c "\
 import torch; \
 from diffusers import AutoPipelineForText2Image; \
 AutoPipelineForText2Image.from_pretrained( \
-    'stabilityai/sd-turbo', \
+    'SimianLuo/LCM_Dreamshaper_v7', \
     torch_dtype=torch.float32, \
     cache_dir='/app/model_cache/hub' \
 )"
@@ -70,9 +70,10 @@ RUN chmod +x ./start.sh
 ENV PORT=7860 \
     RUST_LOG=avagen=info,tower_http=info \
     HF_HOME=/app/model_cache \
-    SD_MODEL_REPO=stabilityai/sd-turbo \
-    SD_NUM_STEPS=1 \
-    SD_GUIDANCE_SCALE=0.0 \
+    SD_MODEL_REPO=SimianLuo/LCM_Dreamshaper_v7 \
+    SD_NUM_STEPS=4 \
+    SD_GUIDANCE_SCALE=8.0 \
+    SD_USE_LCM=1 \
     SD_DEFAULT_SIZE=512 \
     SKIP_VIDEO_PIPELINE=1
 
