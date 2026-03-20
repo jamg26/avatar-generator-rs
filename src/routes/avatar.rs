@@ -20,7 +20,7 @@ pub async fn generate(
     let size = ((size_raw + 32) / 64) * 64;
 
     // Body shots use non-square aspect ratios; headshots stay square.
-    let (width, height) = match req.shot_type {
+    let (base_width, base_height) = match req.shot_type {
         ShotType::Headshot => (size, size),
         ShotType::Portrait => {
             // 3:4 ratio — standard portrait (waist-up)
@@ -37,6 +37,24 @@ pub async fn generate(
             let w = ((size_raw * 3 / 2) + 32) / 64 * 64;
             (w, size)
         }
+    };
+
+    // Explicit width/height override the dimensions derived from size+shot_type.
+    let width = if let Some(w) = req.width {
+        if !(128..=1500).contains(&w) {
+            return Err(AppError::BadRequest("width must be between 128 and 1500".into()));
+        }
+        ((w + 32) / 64) * 64
+    } else {
+        base_width
+    };
+    let height = if let Some(h) = req.height {
+        if !(128..=1500).contains(&h) {
+            return Err(AppError::BadRequest("height must be between 128 and 1500".into()));
+        }
+        ((h + 32) / 64) * 64
+    } else {
+        base_height
     };
 
     let seed = req.seed.unwrap_or_else(|| rand::random::<u64>());

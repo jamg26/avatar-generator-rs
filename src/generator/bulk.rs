@@ -85,6 +85,12 @@ pub struct BulkRequest {
     /// Defaults to 512 if omitted.
     #[serde(default)]
     pub size: Option<usize>,
+    /// Override width in pixels (128–1500). Takes precedence over the width derived from `size`.
+    #[serde(default)]
+    pub width: Option<usize>,
+    /// Override height in pixels (128–1500). Takes precedence over the height derived from `size`.
+    #[serde(default)]
+    pub height: Option<usize>,
 }
 
 fn default_concurrency() -> usize { 1 }
@@ -504,6 +510,8 @@ async fn try_generate_horde(
 
     let size_raw = req.size.unwrap_or(512).clamp(128, 1500);
     let size     = ((size_raw + 32) / 64) * 64;
+    let width    = req.width.map(|w| ((w.clamp(128, 1500) + 32) / 64) * 64).unwrap_or(size);
+    let height   = req.height.map(|h| ((h.clamp(128, 1500) + 32) / 64) * 64).unwrap_or(size);
 
     let resp = client
         .post(format!("{HORDE_API}/generate/async"))
@@ -511,8 +519,8 @@ async fn try_generate_horde(
             "prompt": full_prompt,
             "params": {
                 "steps":        req.model.steps(),
-                "width":        size,
-                "height":       size,
+                "width":        width,
+                "height":       height,
                 "n":            1,
                 "sampler_name": "k_euler",
                 "cfg_scale":    req.model.guidance(),
@@ -596,11 +604,13 @@ async fn generate_one_local(
 
     let size_raw = req.size.unwrap_or(512).clamp(128, 1500);
     let size     = ((size_raw + 32) / 64) * 64;
+    let width    = req.width.map(|w| ((w.clamp(128, 1500) + 32) / 64) * 64).unwrap_or(size);
+    let height   = req.height.map(|h| ((h.clamp(128, 1500) + 32) / 64) * 64).unwrap_or(size);
 
     let resp = client
         .post(format!("{gpu_url}/generate"))
         .timeout(Duration::from_secs(120))
-        .json(&GpuReq { prompt: &prompt, width: size as u32, height: size as u32, steps: 4, seed })
+        .json(&GpuReq { prompt: &prompt, width: width as u32, height: height as u32, steps: 4, seed })
         .send()
         .await
         .map_err(|e| anyhow!(
@@ -639,6 +649,8 @@ fn make_avatar_request(req: &BulkRequest) -> AvatarRequest {
         style:       ArtStyle::Photorealistic,
         format:      ImageFormat::Jpeg,
         size:        req.size.or(Some(512)),
+        width:       None,
+        height:      None,
         seed:        None,
         shot_type:   ShotType::Headshot,
     }

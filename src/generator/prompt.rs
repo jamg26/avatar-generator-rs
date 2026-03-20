@@ -46,6 +46,12 @@ pub struct AvatarRequest {
     /// Output size in pixels (128–1500, rounded to nearest multiple of 64)
     #[serde(default)]
     pub size: Option<usize>,
+    /// Override width in pixels (128–1500). Takes precedence over the width derived from `size`.
+    #[serde(default)]
+    pub width: Option<usize>,
+    /// Override height in pixels (128–1500). Takes precedence over the height derived from `size`.
+    #[serde(default)]
+    pub height: Option<usize>,
     /// Optional seed for reproducible output
     #[serde(default)]
     pub seed: Option<u64>,
