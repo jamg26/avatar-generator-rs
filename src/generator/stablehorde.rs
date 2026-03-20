@@ -61,7 +61,7 @@ impl StableHordePipeline {
         let client = Client::builder()
             .default_headers(headers)
             .user_agent("avagen/1.0")
-            .timeout(Duration::from_secs(180))
+            .timeout(Duration::from_secs(600))
             .build()?;
         Ok(Self { client })
     }
@@ -88,12 +88,14 @@ impl StableHordePipeline {
 
         // Retry up to 3 attempts total (fault/censored/timeout can be transient)
         let mut last_err = anyhow!("generation failed");
+        let mut current_seed = seed;
         for attempt in 0..3u32 {
             if attempt > 0 {
                 tracing::warn!("Stable Horde attempt {attempt} after: {last_err}");
-                sleep(Duration::from_secs(2)).await;
+                sleep(Duration::from_secs(5)).await;
+                current_seed = rand::random();
             }
-            match self.try_generate(&full_prompt, dim_w, dim_h, steps, sampler, cfg, &models, seed).await {
+            match self.try_generate(&full_prompt, dim_w, dim_h, steps, sampler, cfg, &models, current_seed).await {
                 Ok(img) => return Ok(img),
                 Err(e) => last_err = e,
             }
@@ -127,7 +129,7 @@ impl StableHordePipeline {
                     "seed": seed.to_string(),
                 },
                 "nsfw": false,
-                "censor_nsfw": false,
+                "censor_nsfw": true,
                 "slow_workers": true,
                 "models": models,
                 "r2": true,
@@ -144,8 +146,8 @@ impl StableHordePipeline {
         let job: AsyncResponse = resp.json().await?;
         let job_id = job.id;
 
-        // Poll /check until done (timeout 300s — FLUX queues can be a few minutes)
-        let deadline = Instant::now() + Duration::from_secs(300);
+        // Poll /check until done (timeout 900s — matches bulk pipeline; FLUX queues can be long)
+        let deadline = Instant::now() + Duration::from_secs(900);
         // First check after 3s — jobs often complete in 3-10s on fast workers
         sleep(Duration::from_secs(3)).await;
         loop {
@@ -164,7 +166,7 @@ impl StableHordePipeline {
                 break;
             }
             if Instant::now() > deadline {
-                return Err(anyhow!("Stable Horde generation timed out after 300s"));
+                return Err(anyhow!("Stable Horde generation timed out after 900s"));
             }
             sleep(Duration::from_secs(3)).await;
         }
