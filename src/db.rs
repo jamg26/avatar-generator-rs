@@ -194,17 +194,20 @@ pub async fn daily_usage(
 
 #[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
 pub struct BatchJobRow {
-    pub id:           uuid::Uuid,
-    pub state:        String,
-    pub total:        i64,
-    pub completed:    i64,
-    pub failed_count: i64,
-    pub model:        String,
-    pub download_url: Option<String>,
-    pub error_msg:    Option<String>,
-    pub api_key_id:   String,
-    pub created_at:   DateTime<Utc>,
-    pub updated_at:   DateTime<Utc>,
+    pub id:             uuid::Uuid,
+    pub state:          String,
+    pub total:          i64,
+    pub completed:      i64,
+    pub failed_count:   i64,
+    pub model:          String,
+    pub download_url:   Option<String>,
+    pub error_msg:      Option<String>,
+    pub api_key_id:     String,
+    pub created_at:     DateTime<Utc>,
+    pub updated_at:     DateTime<Utc>,
+    /// 1-based global queue position across all active jobs.
+    /// NULL for jobs that are already done or failed.
+    pub queue_position: Option<i64>,
 }
 
 pub async fn create_batch_job(
@@ -296,7 +299,14 @@ pub async fn get_batch_job(
     api_key_id: &str,
 ) -> Result<Option<BatchJobRow>, sqlx::Error> {
     sqlx::query_as::<_, BatchJobRow>(
-        "SELECT * FROM batch_jobs WHERE id = $1 AND api_key_id = $2"
+        "SELECT *,
+            CASE WHEN state IN ('queued','running','uploading') THEN
+                (SELECT COUNT(*) FROM batch_jobs b2
+                 WHERE b2.state IN ('queued','running','uploading')
+                   AND b2.created_at < batch_jobs.created_at) + 1
+            ELSE NULL END AS queue_position
+         FROM batch_jobs
+         WHERE id = $1 AND api_key_id = $2"
     )
     .bind(id)
     .bind(api_key_id)
@@ -308,7 +318,15 @@ pub async fn list_batch_jobs(
     api_key_id: &str,
 ) -> Result<Vec<BatchJobRow>, sqlx::Error> {
     sqlx::query_as::<_, BatchJobRow>(
-        "SELECT * FROM batch_jobs WHERE api_key_id = $1 ORDER BY created_at DESC"
+        "SELECT *,
+            CASE WHEN state IN ('queued','running','uploading') THEN
+                (SELECT COUNT(*) FROM batch_jobs b2
+                 WHERE b2.state IN ('queued','running','uploading')
+                   AND b2.created_at < batch_jobs.created_at) + 1
+            ELSE NULL END AS queue_position
+         FROM batch_jobs
+         WHERE api_key_id = $1
+         ORDER BY created_at DESC"
     )
     .bind(api_key_id)
     .fetch_all(pool).await

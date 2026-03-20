@@ -101,17 +101,21 @@ pub enum JobState {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BatchJobStatus {
-    pub job_id:       Uuid,
-    pub state:        JobState,
-    pub total:        usize,
-    pub completed:    usize,
-    pub failed:       usize,
+    pub job_id:         Uuid,
+    pub state:          JobState,
+    pub total:          usize,
+    pub completed:      usize,
+    pub failed:         usize,
     /// Seconds elapsed since the job was created.
     /// For finished jobs (done/failed) this is the total wall-clock duration.
     /// For in-progress jobs this is the time elapsed so far.
-    pub elapsed_secs: u64,
+    pub elapsed_secs:   u64,
+    /// 1-based global queue position. `null` once the job is done or failed.
+    pub queue_position: Option<usize>,
+    /// Number of jobs ahead of this one. Equals `queue_position - 1`.
+    pub queue_ahead:    Option<usize>,
     /// HF bucket download URL — present once the job reaches `done`.
-    pub download_url: Option<String>,
+    pub download_url:   Option<String>,
 }
 
 impl From<crate::db::BatchJobRow> for BatchJobStatus {
@@ -120,6 +124,8 @@ impl From<crate::db::BatchJobRow> for BatchJobStatus {
             "done" | "failed" => (row.updated_at - row.created_at).num_seconds().max(0) as u64,
             _                 => (Utc::now()     - row.created_at).num_seconds().max(0) as u64,
         };
+        let queue_position = row.queue_position.map(|p| p.max(1) as usize);
+        let queue_ahead    = queue_position.map(|p| p.saturating_sub(1));
         Self {
             job_id: row.id,
             state: match row.state.as_str() {
@@ -133,6 +139,8 @@ impl From<crate::db::BatchJobRow> for BatchJobStatus {
             completed:    row.completed as usize,
             failed:       row.failed_count as usize,
             elapsed_secs,
+            queue_position,
+            queue_ahead,
             download_url: row.download_url,
         }
     }
@@ -186,12 +194,14 @@ impl BulkPipeline {
 
         let status = BatchJobStatus {
             job_id,
-            state:        JobState::Queued,
-            total:        req.count,
-            completed:    0,
-            failed:       0,
-            elapsed_secs: 0,
-            download_url: None,
+            state:          JobState::Queued,
+            total:          req.count,
+            completed:      0,
+            failed:         0,
+            elapsed_secs:   0,
+            queue_position: None,
+            queue_ahead:    None,
+            download_url:   None,
         };
 
         let client       = self.client.clone();
