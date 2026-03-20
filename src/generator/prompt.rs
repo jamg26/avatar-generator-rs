@@ -220,10 +220,15 @@ pub enum ImageFormat {
 #[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum ShotType {
-    /// Tight crop: face and shoulders only (square canvas)
+    /// Tight crop: face and shoulders only (1:1 square canvas)
     Headshot,
-    /// Half-body or full-body shot (portrait 3:4 canvas)
-    Body,
+    /// Standard portrait: head to waist, 3:4 canvas
+    Portrait,
+    /// Full body: head to toe, 2:3 canvas
+    #[serde(alias = "body")]
+    FullBody,
+    /// Wide landscape orientation, 3:2 canvas
+    Landscape,
 }
 
 // ── Defaults ─────────────────────────────────────────────────────────────────
@@ -313,7 +318,11 @@ impl AvatarRequest {
 
     /// Fixed negative prompt to avoid common SD artifacts.
     pub fn negative_prompt(&self) -> &'static str {
-        "ugly, deformed, disfigured, blurry, bad anatomy, extra limbs, mutated, \
+        "nsfw, nude, naked, nudity, explicit, sexual, revealing, cleavage, underwear, \
+         lingerie, inappropriate, suggestive, adult content, mature content, \
+         anime, cartoon, illustration, drawing, painting, sketch, 3d render, cgi, \
+         digital art, art style, stylized, unrealistic, fictional, fantasy, \
+         ugly, deformed, disfigured, blurry, bad anatomy, extra limbs, mutated, \
          duplicate, morbid, mutilated, poorly drawn face, extra fingers, fused fingers, \
          too many fingers, long neck, watermark, text, signature, logo, banner, \
          low quality, worst quality, normal quality, jpeg artifacts, cropped, \
@@ -329,23 +338,50 @@ impl AvatarRequest {
     fn framing_prefix(&self) -> &str {
         match (&self.style, &self.shot_type) {
             (ArtStyle::Photorealistic, ShotType::Headshot) =>
-                "A photorealistic professional headshot portrait photograph, \
-                 face and shoulders, centered composition, face centered in frame",
-            (ArtStyle::Photorealistic, ShotType::Body) =>
-                "A photorealistic professional portrait photograph, \
-                 half-body shot, subject centered in frame, centered composition",
+                "RAW photo, professional casting headshot, real human being, \
+                 fully clothed, SFW, work-safe, \
+                 DSLR photograph, face and shoulders, tight crop, \
+                 subject centered in frame, direct eye contact, \
+                 Fujifilm X-T4, 85mm portrait lens, f/2.8",
+            (ArtStyle::Photorealistic, ShotType::Portrait) =>
+                "RAW photo, professional portrait photograph, real human being, \
+                 fully clothed, SFW, work-safe, \
+                 DSLR photograph, waist-up shot, subject centered in frame, \
+                 Canon EOS R5, 85mm lens, f/2.8",
+            (ArtStyle::Photorealistic, ShotType::FullBody) =>
+                "RAW photo, full body portrait photograph, real human being, \
+                 fully clothed, SFW, work-safe, \
+                 DSLR photograph, head to toe, full length, subject centered in frame, \
+                 Canon EOS R5, 35mm lens, f/4.0",
+            (ArtStyle::Photorealistic, ShotType::Landscape) =>
+                "RAW photo, wide environmental portrait photograph, real human being, \
+                 fully clothed, SFW, work-safe, \
+                 DSLR photograph, wide shot, landscape orientation, subject in scene, \
+                 Canon EOS R5, 24-70mm lens, f/5.6",
             (ArtStyle::DigitalArt, ShotType::Headshot) =>
                 "A high-quality digital art headshot portrait, face centered in frame",
-            (ArtStyle::DigitalArt, ShotType::Body) =>
-                "A high-quality digital art portrait, half-body shot, subject centered",
+            (ArtStyle::DigitalArt, ShotType::Portrait) =>
+                "A high-quality digital art portrait, waist-up shot, subject centered",
+            (ArtStyle::DigitalArt, ShotType::FullBody) =>
+                "A high-quality digital art full body portrait, head to toe, subject centered",
+            (ArtStyle::DigitalArt, ShotType::Landscape) =>
+                "A high-quality digital art wide scene portrait, landscape orientation",
             (ArtStyle::Anime, ShotType::Headshot) =>
                 "An anime-style headshot portrait illustration, face centered",
-            (ArtStyle::Anime, ShotType::Body) =>
-                "An anime-style portrait illustration, half-body, subject centered",
+            (ArtStyle::Anime, ShotType::Portrait) =>
+                "An anime-style portrait illustration, waist-up shot, subject centered",
+            (ArtStyle::Anime, ShotType::FullBody) =>
+                "An anime-style full body illustration, head to toe, subject centered",
+            (ArtStyle::Anime, ShotType::Landscape) =>
+                "An anime-style wide scene illustration, landscape orientation",
             (ArtStyle::Cartoon, ShotType::Headshot) =>
                 "A cartoon-style headshot portrait, face centered in frame",
-            (ArtStyle::Cartoon, ShotType::Body) =>
-                "A cartoon-style portrait illustration, half-body, subject centered",
+            (ArtStyle::Cartoon, ShotType::Portrait) =>
+                "A cartoon-style portrait illustration, waist-up shot, subject centered",
+            (ArtStyle::Cartoon, ShotType::FullBody) =>
+                "A cartoon-style full body illustration, head to toe, subject centered",
+            (ArtStyle::Cartoon, ShotType::Landscape) =>
+                "A cartoon-style wide scene illustration, landscape orientation",
             _ => self.style_prefix(),
         }
     }
@@ -467,25 +503,36 @@ impl AvatarRequest {
 
     fn background_text(&self) -> &str {
         match self.background {
-            Background::White => "clean white",
-            Background::Gray => "neutral gray",
-            Background::Blue => "soft blue",
+            Background::White => "clean white seamless",
+            Background::Gray => "neutral light gray seamless",
+            Background::Blue => "soft blue seamless",
             Background::Gradient => "smooth gradient",
             Background::Nature => "natural outdoors bokeh",
-            Background::Studio => "professional studio lighting",
+            Background::Studio => "clean neutral gray studio, professional studio lighting, softbox",
         }
     }
 
     fn quality_suffix(&self) -> &str {
         match (&self.style, &self.shot_type) {
             (ArtStyle::Photorealistic, ShotType::Headshot) =>
-                "highly detailed, sharp focus, professional headshot, studio lighting, \
-                 perfect facial features, even lighting",
-            (ArtStyle::Photorealistic, ShotType::Body) =>
-                "highly detailed, sharp focus, professional portrait, studio lighting, \
-                 full body visible, perfect proportions",
+                "photorealistic, hyperrealistic, 8k uhd, ultra-detailed skin texture, \
+                 visible pores, sharp focus, professional studio lighting, \
+                 theatrical headshot, casting photo, real person, \
+                 natural skin, film grain, physically based rendering",
+            (ArtStyle::Photorealistic, ShotType::Portrait) =>
+                "photorealistic, hyperrealistic, 8k uhd, ultra-detailed, sharp focus, \
+                 professional studio lighting, real person, natural skin texture, \
+                 film grain, physically based rendering",
+            (ArtStyle::Photorealistic, ShotType::FullBody) =>
+                "photorealistic, hyperrealistic, 8k uhd, ultra-detailed, sharp focus, \
+                 professional studio lighting, real person, natural skin texture, \
+                 full body visible, film grain, physically based rendering",
+            (ArtStyle::Photorealistic, ShotType::Landscape) =>
+                "photorealistic, hyperrealistic, 8k uhd, ultra-detailed, sharp focus, \
+                 natural lighting, real person, environmental portrait, wide angle",
             (ArtStyle::Photorealistic, _) =>
-                "highly detailed, sharp focus, professional headshot, studio lighting",
+                "photorealistic, hyperrealistic, 8k uhd, ultra-detailed, sharp focus, \
+                 professional studio lighting, real person",
             (ArtStyle::DigitalArt, _) => "trending on artstation, highly detailed, smooth",
             (ArtStyle::Anime, _) => "detailed anime style, clean lines, vibrant colors",
             (ArtStyle::Cartoon, _) => "clean vector style, bold outlines, vibrant",
@@ -545,6 +592,7 @@ mod tests {
             format: ImageFormat::Png,
             size: None,
             seed: None,
+            shot_type: ShotType::Headshot,
         };
 
         let prompt = req.to_prompt();

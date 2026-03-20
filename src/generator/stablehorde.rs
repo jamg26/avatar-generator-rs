@@ -10,8 +10,8 @@ use super::prompt::AvatarRequest;
 const HORDE_API: &str = "https://stablehorde.net/api/v2";
 /// Used when STABLE_HORDE_KEY env var is not set. Registered free accounts get higher priority.
 const ANON_KEY: &str = "0000000000";
-/// High-worker-count model for realistic portraits — more workers = faster queue
-const DEFAULT_MODEL: &str = "Dreamshaper";
+/// Correct model name on Stable Horde (case-sensitive)
+const DEFAULT_MODEL: &str = "Flux.1-Schnell fp8 (Compact)";
 
 pub struct StableHordePipeline {
     client: Client,
@@ -36,6 +36,8 @@ struct StatusResponse {
 #[derive(Deserialize)]
 struct Generation {
     img: String,
+    #[serde(default)]
+    censored: bool,
 }
 
 impl StableHordePipeline {
@@ -67,35 +69,67 @@ impl StableHordePipeline {
     pub async fn generate(
         &self,
         req: &AvatarRequest,
-        size: usize,
+        width: usize,
+        height: usize,
         seed: u64,
     ) -> Result<DynamicImage> {
         let prompt = req.to_prompt();
-        let neg = req.negative_prompt();
+        // FLUX.1-Schnell ignores negative prompts
+        let full_prompt = prompt;
 
-        // Stable Horde uses "prompt ### negative" format
-        let full_prompt = format!("{prompt} ### {neg}");
+        // Round to nearest 64, enforce minimum 512 for FLUX quality
+        let dim_w = (((width as u32 + 32) / 64) * 64).max(512);
+        let dim_h = (((height as u32 + 32) / 64) * 64).max(512);
 
-        // Clamp to multiples of 64; anonymous tier works best at 512x512
-        let dim = ((size.min(768) as u32).max(512) / 64) * 64;
+        // FLUX.1-Schnell optimal parameters
+        let (steps, sampler, cfg) = (4u32, "k_euler", 1.0f64);
+        // Always FLUX — no fallback model
+        let models = vec![DEFAULT_MODEL];
 
-        // Submit generation job
+        // Retry up to 3 attempts total (fault/censored/timeout can be transient)
+        let mut last_err = anyhow!("generation failed");
+        for attempt in 0..3u32 {
+            if attempt > 0 {
+                tracing::warn!("Stable Horde attempt {attempt} after: {last_err}");
+                sleep(Duration::from_secs(2)).await;
+            }
+            match self.try_generate(&full_prompt, dim_w, dim_h, steps, sampler, cfg, &models, seed).await {
+                Ok(img) => return Ok(img),
+                Err(e) => last_err = e,
+            }
+        }
+        Err(last_err)
+    }
+
+    async fn try_generate(
+        &self,
+        full_prompt: &str,
+        dim_w: u32,
+        dim_h: u32,
+        steps: u32,
+        sampler: &str,
+        cfg: f64,
+        models: &[&str],
+        seed: u64,
+    ) -> Result<DynamicImage> {
         let resp = self
             .client
             .post(format!("{HORDE_API}/generate/async"))
             .json(&serde_json::json!({
                 "prompt": full_prompt,
                 "params": {
-                    "steps": 25,
-                    "width": dim,
-                    "height": dim,
+                    "steps": steps,
+                    "width": dim_w,
+                    "height": dim_h,
                     "n": 1,
-                    "sampler_name": "k_euler_a",
-                    "cfg_scale": 7.0,
+                    "sampler_name": sampler,
+                    "cfg_scale": cfg,
                     "seed": seed.to_string(),
                 },
                 "nsfw": false,
-                "models": [DEFAULT_MODEL],
+                "censor_nsfw": false,
+                "slow_workers": true,
+                "models": models,
                 "r2": true,
             }))
             .send()
@@ -110,10 +144,10 @@ impl StableHordePipeline {
         let job: AsyncResponse = resp.json().await?;
         let job_id = job.id;
 
-        // Poll /check until done (timeout 120s)
-        let deadline = Instant::now() + Duration::from_secs(120);
-        // First check after 2s — jobs often complete in 2-5s on fast workers
-        sleep(Duration::from_secs(2)).await;
+        // Poll /check until done (timeout 300s — FLUX queues can be a few minutes)
+        let deadline = Instant::now() + Duration::from_secs(300);
+        // First check after 3s — jobs often complete in 3-10s on fast workers
+        sleep(Duration::from_secs(3)).await;
         loop {
             let check: CheckResponse = self
                 .client
@@ -130,7 +164,7 @@ impl StableHordePipeline {
                 break;
             }
             if Instant::now() > deadline {
-                return Err(anyhow!("Stable Horde generation timed out after 120s"));
+                return Err(anyhow!("Stable Horde generation timed out after 300s"));
             }
             sleep(Duration::from_secs(3)).await;
         }
@@ -149,6 +183,10 @@ impl StableHordePipeline {
             .into_iter()
             .next()
             .ok_or_else(|| anyhow!("Stable Horde returned no generations"))?;
+
+        if gen.censored {
+            return Err(anyhow!("Stable Horde censored the generation"));
+        }
 
         // img is either a Cloudflare R2 URL or a base64 data URL
         let img_bytes: Vec<u8> = if gen.img.starts_with("data:") {

@@ -19,13 +19,23 @@ pub async fn generate(
     }
     let size = ((size_raw + 32) / 64) * 64;
 
-    // Body shots use a portrait 3:4 aspect ratio; headshots stay square.
-    // DiceBear always returns square PNGs, so we resize after the fact.
+    // Body shots use non-square aspect ratios; headshots stay square.
     let (width, height) = match req.shot_type {
         ShotType::Headshot => (size, size),
-        ShotType::Body => {
+        ShotType::Portrait => {
+            // 3:4 ratio — standard portrait (waist-up)
             let h = ((size_raw * 4 / 3) + 32) / 64 * 64;
             (size, h)
+        }
+        ShotType::FullBody => {
+            // 2:3 ratio — full body, head to toe
+            let h = ((size_raw * 3 / 2) + 32) / 64 * 64;
+            (size, h)
+        }
+        ShotType::Landscape => {
+            // 3:2 ratio — wide landscape orientation
+            let w = ((size_raw * 3 / 2) + 32) / 64 * 64;
+            (w, size)
         }
     };
 
@@ -35,7 +45,7 @@ pub async fn generate(
     tracing::info!(key_prefix = %key.key_prefix, ?req.sex, ?req.ethnicity, "Generating avatar");
 
     let img = state.pipeline
-        .generate(&req, width.max(height), seed).await
+        .generate(&req, width, height, seed).await
         .map_err(|e| AppError::Internal(format!("generation failed: {e}")))?;
 
     // Resize to requested (width × height) if width ≠ height (body shot)

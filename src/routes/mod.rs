@@ -1,4 +1,5 @@
 pub mod avatar;
+pub mod batch;
 pub mod health;
 pub mod keys;
 pub mod usage;
@@ -12,7 +13,11 @@ use tower_http::{ cors::CorsLayer, trace::TraceLayer };
 
 use crate::{
     config::AppConfig,
-    generator::{ stablehorde::StableHordePipeline, video_pipeline::VideoPipeline },
+    generator::{
+        bulk::BulkPipeline,
+        stablehorde::StableHordePipeline,
+        video_pipeline::VideoPipeline,
+    },
     middleware::{ api_key, rate_limit },
 };
 
@@ -21,6 +26,7 @@ pub struct AppState {
     pub pool: PgPool,
     pub config: AppConfig,
     pub pipeline: Arc<StableHordePipeline>,
+    pub bulk_pipeline: Arc<BulkPipeline>,
     pub video_pipeline: Option<Arc<VideoPipeline>>,
 }
 
@@ -28,12 +34,14 @@ pub fn create_router(
     pool: PgPool,
     config: AppConfig,
     pipeline: StableHordePipeline,
+    bulk_pipeline: BulkPipeline,
     video_pipeline: Option<VideoPipeline>,
 ) -> Router {
     let state = AppState {
         pool,
         config: config.clone(),
         pipeline: Arc::new(pipeline),
+        bulk_pipeline: Arc::new(bulk_pipeline),
         video_pipeline: video_pipeline.map(Arc::new),
     };
 
@@ -54,6 +62,9 @@ pub fn create_router(
         .route("/api/v1/avatar/generate", post(avatar::generate))
         .route("/api/v1/video/generate", post(video::generate))
         .route("/api/v1/usage", get(usage::my_usage))
+        .route("/api/v1/batch/generate", post(batch::submit))
+        .route("/api/v1/batch/{job_id}", get(batch::get_job))
+        .route("/api/v1/batch", get(batch::list_jobs))
         .layer(middleware::from_fn_with_state(state.clone(), api_key::require_api_key));
 
     // Admin routes (protected by admin secret in the handler)

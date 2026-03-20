@@ -45,8 +45,10 @@ impl HfInferencePipeline {
         // Clamp to model-safe dimensions (multiples of 8, max 1024)
         let px = (size.min(1024) / 8 * 8).max(256) as u32;
         let (width, height) = match req.shot_type {
-            ShotType::Headshot => (px, px),
-            ShotType::Body     => (px, (px * 4 / 3 / 8 * 8).max(256)),
+            ShotType::Headshot  => (px, px),
+            ShotType::Portrait  => (px, (px * 4 / 3 / 8 * 8).max(256)),
+            ShotType::FullBody  => (px, (px * 3 / 2 / 8 * 8).max(256)),
+            ShotType::Landscape => ((px * 3 / 2 / 8 * 8).max(256), px),
         };
 
         let body = serde_json::json!({

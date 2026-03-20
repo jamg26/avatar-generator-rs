@@ -10,3 +10,11 @@ generated/
 __pycache__/
 *.pyc
 *.pyo
+
+# Local GPU inference sidecar (development only, not for HF Spaces)
+inference_server.py
+inference_requirements.txt
+start_inference.sh
+.venv/
+
+avatars/

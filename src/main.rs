@@ -1,7 +1,11 @@
 use avagen::{
     config::AppConfig,
     db,
-    generator::{ stablehorde::StableHordePipeline, video_pipeline::VideoPipeline },
+    generator::{
+        bulk::BulkPipeline,
+        stablehorde::StableHordePipeline,
+        video_pipeline::VideoPipeline,
+    },
     routes::create_router,
 };
 use std::net::SocketAddr;
@@ -35,6 +39,12 @@ async fn main() {
         std::process::exit(1);
     });
 
+    // ── Bulk generation pipeline ──────────────────────────────────────────────
+    let bulk_pipeline = BulkPipeline::new(config.save_dir.clone()).unwrap_or_else(|e| {
+        tracing::error!("Failed to create BulkPipeline: {e:#}");
+        std::process::exit(1);
+    });
+
     // ── Video pipeline ───────────────────────────────────────────────────────
     let skip_video = std::env
         ::var("SKIP_VIDEO_PIPELINE")
@@ -57,7 +67,7 @@ async fn main() {
     };
 
     // ── HTTP server ──────────────────────────────────────────────────────────
-    let router = create_router(pool, config, pipeline, video_pipeline);
+    let router = create_router(pool, config, pipeline, bulk_pipeline, video_pipeline);
 
     let port: u16 = std::env
         ::var("PORT")

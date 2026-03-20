@@ -2,6 +2,8 @@
 pub struct AppConfig {
     pub database_url: String,
     pub admin_secret: String,
+    /// Directory where bulk-generated images are saved. Defaults to `./avatars`.
+    pub save_dir: std::path::PathBuf,
 
     /// Base URL of the local inference sidecar (used by the video pipeline). Defaults to http://localhost:8001.
     pub infer_url: String,
@@ -33,6 +35,9 @@ impl AppConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(30),
+            save_dir: std::env::var("SAVE_DIR")
+                .unwrap_or_else(|_| "./avatars".into())
+                .into(),
         }
     }
 }

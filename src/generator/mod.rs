@@ -1,3 +1,4 @@
+pub mod bulk;
 pub mod dicebear;
 pub mod hf_inference;
 pub mod pipeline;
