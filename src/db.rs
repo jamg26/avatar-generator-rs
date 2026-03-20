@@ -42,6 +42,23 @@ pub async fn init_pool(database_url: &str) -> PgPool {
         .execute(&pool).await
         .expect("Failed to create usage index");
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS batch_jobs (
+            id           UUID PRIMARY KEY,
+            state        TEXT NOT NULL DEFAULT 'queued',
+            total        BIGINT NOT NULL,
+            completed    BIGINT NOT NULL DEFAULT 0,
+            failed_count BIGINT NOT NULL DEFAULT 0,
+            model        TEXT NOT NULL DEFAULT 'flux',
+            download_url TEXT,
+            error_msg    TEXT,
+            created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"
+    )
+        .execute(&pool).await
+        .expect("Failed to create batch_jobs table");
+
     pool
 }
 
@@ -158,4 +175,116 @@ pub async fn daily_usage(
         .bind(api_key_id)
         .bind(days)
         .fetch_all(pool).await
+}
+// ── Batch job tracking ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct BatchJobRow {
+    pub id:           uuid::Uuid,
+    pub state:        String,
+    pub total:        i64,
+    pub completed:    i64,
+    pub failed_count: i64,
+    pub model:        String,
+    pub download_url: Option<String>,
+    pub error_msg:    Option<String>,
+    pub created_at:   DateTime<Utc>,
+    pub updated_at:   DateTime<Utc>,
+}
+
+pub async fn create_batch_job(
+    pool: &PgPool,
+    id:    uuid::Uuid,
+    total: i64,
+    model: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO batch_jobs (id, total, model, state)
+         VALUES ($1, $2, $3, 'queued')"
+    )
+    .bind(id)
+    .bind(total)
+    .bind(model)
+    .execute(pool).await?;
+    Ok(())
+}
+
+pub async fn update_batch_job_progress(
+    pool:         &PgPool,
+    id:           uuid::Uuid,
+    completed:    i64,
+    failed_count: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE batch_jobs
+         SET completed = $2, failed_count = $3, updated_at = NOW()
+         WHERE id = $1"
+    )
+    .bind(id)
+    .bind(completed)
+    .bind(failed_count)
+    .execute(pool).await?;
+    Ok(())
+}
+
+pub async fn update_batch_job_state(
+    pool:  &PgPool,
+    id:    uuid::Uuid,
+    state: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE batch_jobs SET state = $2, updated_at = NOW() WHERE id = $1"
+    )
+    .bind(id)
+    .bind(state)
+    .execute(pool).await?;
+    Ok(())
+}
+
+pub async fn complete_batch_job(
+    pool:         &PgPool,
+    id:           uuid::Uuid,
+    download_url: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE batch_jobs
+         SET state = 'done', download_url = $2, updated_at = NOW()
+         WHERE id = $1"
+    )
+    .bind(id)
+    .bind(download_url)
+    .execute(pool).await?;
+    Ok(())
+}
+
+pub async fn fail_batch_job(
+    pool:  &PgPool,
+    id:    uuid::Uuid,
+    error: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE batch_jobs
+         SET state = 'failed', error_msg = $2, updated_at = NOW()
+         WHERE id = $1"
+    )
+    .bind(id)
+    .bind(error)
+    .execute(pool).await?;
+    Ok(())
+}
+
+pub async fn get_batch_job(
+    pool: &PgPool,
+    id:   uuid::Uuid,
+) -> Result<Option<BatchJobRow>, sqlx::Error> {
+    sqlx::query_as::<_, BatchJobRow>("SELECT * FROM batch_jobs WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool).await
+}
+
+pub async fn list_batch_jobs(pool: &PgPool) -> Result<Vec<BatchJobRow>, sqlx::Error> {
+    sqlx::query_as::<_, BatchJobRow>(
+        "SELECT * FROM batch_jobs ORDER BY created_at DESC"
+    )
+    .fetch_all(pool).await
 }

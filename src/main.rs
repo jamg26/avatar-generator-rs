@@ -40,7 +40,7 @@ async fn main() {
     });
 
     // ── Bulk generation pipeline ──────────────────────────────────────────────
-    let bulk_pipeline = BulkPipeline::new(config.save_dir.clone()).unwrap_or_else(|e| {
+    let bulk_pipeline = BulkPipeline::new(config.save_dir.clone(), pool.clone()).unwrap_or_else(|e| {
         tracing::error!("Failed to create BulkPipeline: {e:#}");
         std::process::exit(1);
     });

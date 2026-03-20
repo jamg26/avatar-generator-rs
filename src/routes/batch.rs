@@ -34,7 +34,7 @@ pub async fn submit(
         "Submitting bulk job"
     );
 
-    let status = state.bulk_pipeline.submit(req).await;
+    let status = state.bulk_pipeline.submit(req).await?;
 
     db::record_usage(&state.pool, &key.id, "/api/v1/batch/generate").await?;
 
@@ -52,7 +52,7 @@ pub async fn get_job(
     state
         .bulk_pipeline
         .get_status(job_id)
-        .await
+        .await?
         .map(Json)
         .ok_or_else(|| AppError::NotFound(format!("job {job_id} not found")))
 }
@@ -63,6 +63,6 @@ pub async fn get_job(
 pub async fn list_jobs(
     State(state): State<AppState>,
     Extension(_key): Extension<db::ApiKeyRow>,
-) -> Json<Vec<BatchJobStatus>> {
-    Json(state.bulk_pipeline.list_all().await)
+) -> Result<Json<Vec<BatchJobStatus>>, AppError> {
+    Ok(Json(state.bulk_pipeline.list_all().await?))
 }
