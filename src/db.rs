@@ -152,7 +152,7 @@ pub async fn record_usage(
 pub async fn monthly_usage_count(pool: &PgPool, api_key_id: &str) -> Result<i64, sqlx::Error> {
     let row: (i64,) = sqlx
         ::query_as(
-            "SELECT COALESCE(SUM(count), 0) FROM usage_log
+            "SELECT COALESCE(SUM(count), 0)::BIGINT FROM usage_log
          WHERE api_key_id = $1
            AND created_at >= DATE_TRUNC('month', NOW())"
         )
