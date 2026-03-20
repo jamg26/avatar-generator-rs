@@ -8,14 +8,14 @@ pinned: false
 app_port: 7860
 hardware: cpu-basic
 license: mit
-short_description: AI avatar API — SD 1.5 OpenVINO FP16, Rust/Axum
+short_description: AI avatar & batch generation API — Stable Horde, Rust/Axum
 ---
 
 # AvaGen — AI Avatar Generation API
 
 REST API that generates photorealistic AI avatar portraits from structured
-demographic descriptions. Built with **Rust/Axum** + a **Python SD 1.5
-OpenVINO FP16 inference sidecar**, deployed on HuggingFace Spaces (CPU, no GPU required).
+demographic descriptions. Built with **Rust/Axum**, backed by **Stable Horde**
+(free community GPU cluster) — no local GPU or Python sidecar needed.
 
 ## Setup — Space Secrets
 
@@ -80,11 +80,10 @@ curl https://jamg-avagen.hf.space/api/v1/usage \
 
 ```
 HF Space container
-├── Rust/Axum server  :7860  ← public HTTPS traffic
-│     auth, rate-limiting, DB, routing
-└── Python sidecar    :8001  ← localhost only
-      SD 1.5 OpenVINO FP16 (~20 s/image on CPU, 20-step, AVX-512 accelerated)
+└── Rust/Axum server  :7860  ← public HTTPS traffic
+      auth, rate-limiting, DB, routing
+      → Stable Horde API (free community GPU cluster)
 ```
 
-OpenVINO FP16 weights are downloaded on first startup and cached.
-~20 s per image at 512×512 using CPU AI instructions (AVX-512) — no GPU needed.
+Image generation delegates to Stable Horde (FLUX.1-Schnell fp8) — no GPU or
+large RAM needed in the container. Typical generation: 5–20 s.
