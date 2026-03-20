@@ -21,9 +21,12 @@ WORKDIR /app
 
 # ca-certificates — needed for TLS certificate verification (DiceBear API, NeonDB)
 # libssl3         — runtime OpenSSL libs (linked by sqlx / reqwest)
+# python3 + venv  — needed by huggingface_hub for HF bucket uploads
 RUN apt-get update && apt-get install -y \
-    ca-certificates libssl3 && \
-    rm -rf /var/lib/apt/lists/*
+    ca-certificates libssl3 python3 python3-venv && \
+    python3 -m venv /opt/hfvenv && \
+    /opt/hfvenv/bin/pip install --quiet "huggingface_hub>=1.5.0" && \
+    rm -rf /var/lib/apt/lists/* /root/.cache/pip
 
 COPY --from=builder /build/target/release/avagen ./avagen
 RUN chmod +x ./avagen

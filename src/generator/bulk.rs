@@ -8,7 +8,6 @@ use anyhow::{anyhow, Result};
 use base64::Engine;
 use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tokio::time::{sleep, Duration, Instant};
 use uuid::Uuid;
@@ -21,8 +20,6 @@ use super::prompt::{
 
 const HORDE_API: &str = "https://stablehorde.net/api/v2";
 const ANON_KEY: &str = "0000000000";
-/// Files ≤ this size are inlined as base64; larger ones use Git LFS.
-const HF_INLINE_LIMIT: usize = 10 * 1024 * 1024;
 
 // ── Model selection ──────────────────────────────────────────────────────────
 
@@ -85,7 +82,7 @@ pub struct BulkRequest {
     pub model: BulkModel,
 }
 
-fn default_concurrency() -> usize { 5 }
+fn default_concurrency() -> usize { 1 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -104,7 +101,7 @@ pub struct BatchJobStatus {
     pub total:        usize,
     pub completed:    usize,
     pub failed:       usize,
-    /// HF dataset download URL — present once the job reaches `done`.
+    /// HF bucket download URL — present once the job reaches `done`.
     pub download_url: Option<String>,
 }
 
@@ -130,11 +127,11 @@ impl From<crate::db::BatchJobRow> for BatchJobStatus {
 // ── Pipeline ──────────────────────────────────────────────────────────────────
 
 pub struct BulkPipeline {
-    client:          Client,
-    pool:            PgPool,
-    save_dir:        PathBuf,
-    hf_token:        Option<String>,
-    hf_dataset_repo: String,
+    client:       Client,
+    pool:         PgPool,
+    save_dir:     PathBuf,
+    hf_token:     Option<String>,
+    hf_bucket_id: String,
 }
 
 impl BulkPipeline {
@@ -152,14 +149,14 @@ impl BulkPipeline {
         let client = Client::builder()
             .default_headers(hdrs)
             .user_agent("avagen-bulk/1.0")
-            .timeout(Duration::from_secs(180))
+            .timeout(Duration::from_secs(600))
             .build()?;
 
-        let hf_token        = std::env::var("HF_TOKEN").ok();
-        let hf_dataset_repo = std::env::var("HF_DATASET_REPO")
+        let hf_token     = std::env::var("HF_TOKEN").ok();
+        let hf_bucket_id = std::env::var("HF_BUCKET_ID")
             .unwrap_or_else(|_| "jamg/avagen-batches".into());
 
-        Ok(Self { client, pool, save_dir, hf_token, hf_dataset_repo })
+        Ok(Self { client, pool, save_dir, hf_token, hf_bucket_id })
     }
 
     /// Submit a batch job — returns immediately; generation + upload run in background.
@@ -180,13 +177,13 @@ impl BulkPipeline {
             download_url: None,
         };
 
-        let client          = self.client.clone();
-        let pool            = self.pool.clone();
-        let hf_token        = self.hf_token.clone();
-        let hf_dataset_repo = self.hf_dataset_repo.clone();
+        let client       = self.client.clone();
+        let pool         = self.pool.clone();
+        let hf_token     = self.hf_token.clone();
+        let hf_bucket_id = self.hf_bucket_id.clone();
 
         tokio::spawn(async move {
-            run_job(client, pool, job_id, req, save_path, hf_token, hf_dataset_repo).await;
+            run_job(client, pool, job_id, req, save_path, hf_token, hf_bucket_id).await;
         });
 
         Ok(status)
@@ -210,13 +207,13 @@ impl BulkPipeline {
 // ── Background worker pool ────────────────────────────────────────────────────
 
 async fn run_job(
-    client:          Client,
-    pool:            PgPool,
-    job_id:          Uuid,
-    req:             BulkRequest,
-    save_path:       PathBuf,
-    hf_token:        Option<String>,
-    hf_dataset_repo: String,
+    client:       Client,
+    pool:         PgPool,
+    job_id:       Uuid,
+    req:          BulkRequest,
+    save_path:    PathBuf,
+    hf_token:     Option<String>,
+    hf_bucket_id: String,
 ) {
     if let Err(e) = tokio::fs::create_dir_all(&save_path).await {
         tracing::error!(?job_id, "Failed to create save dir: {e}");
@@ -281,7 +278,7 @@ async fn run_job(
     tracing::info!(?job_id, completed, failed_count, "Generation complete — zipping and uploading");
     let _ = db::update_batch_job_state(&pool, job_id, "uploading").await;
 
-    match finalize_job(&client, &pool, job_id, &save_path, hf_token.as_deref(), &hf_dataset_repo).await {
+    match finalize_job(&pool, job_id, &save_path, hf_token.as_deref(), &hf_bucket_id).await {
         Ok(url)  => tracing::info!(?job_id, download_url = %url, "Batch job done"),
         Err(e)   => {
             tracing::error!(?job_id, "Finalize failed: {e}");
@@ -293,20 +290,19 @@ async fn run_job(
 // ── Post-generation: zip → upload → cleanup ──────────────────────────────────
 
 async fn finalize_job(
-    client:          &Client,
-    pool:            &PgPool,
-    job_id:          Uuid,
-    save_path:       &PathBuf,
-    hf_token:        Option<&str>,
-    hf_dataset_repo: &str,
+    pool:         &PgPool,
+    job_id:       Uuid,
+    save_path:    &PathBuf,
+    hf_token:     Option<&str>,
+    hf_bucket_id: &str,
 ) -> Result<String> {
     let zip_path = create_zip(job_id, save_path).await?;
     tracing::info!(?job_id, ?zip_path, "Zip created");
 
     let download_url = match hf_token {
         Some(token) => {
-            let zip_bytes = tokio::fs::read(&zip_path).await?;
-            upload_zip_to_hf(client, token, hf_dataset_repo, job_id, &zip_bytes).await?
+            let filename = format!("batch_{job_id}.zip");
+            upload_zip_to_bucket(token, hf_bucket_id, &zip_path, &filename).await?
         }
         None => {
             tracing::warn!(?job_id, "HF_TOKEN not set — skipping upload");
@@ -363,172 +359,58 @@ async fn create_zip(job_id: Uuid, save_path: &Path) -> Result<PathBuf> {
     Ok(zip_path)
 }
 
-// ── HuggingFace Dataset upload ────────────────────────────────────────────────
+// ── HuggingFace Bucket upload ─────────────────────────────────────────────────
 
-async fn ensure_hf_dataset_repo(client: &Client, token: &str, repo_id: &str) -> Result<()> {
-    let (namespace, name) = repo_id
-        .split_once('/')
-        .ok_or_else(|| anyhow!("HF_DATASET_REPO must be 'namespace/name', got '{repo_id}'"))?;
-
-    let resp = client
-        .post("https://huggingface.co/api/repos/create")
-        .bearer_auth(token)
-        .json(&serde_json::json!({
-            "type":         "dataset",
-            "name":         name,
-            "organization": namespace,
-            "private":      false,
-        }))
-        .send()
-        .await?;
-
-    let st = resp.status().as_u16();
-    if st == 200 || st == 201 || st == 409 {
-        return Ok(());
-    }
-    let body = resp.text().await.unwrap_or_default();
-    Err(anyhow!("Failed to create HF dataset repo ({st}): {body}"))
-}
-
-async fn upload_zip_to_hf(
-    client:          &Client,
-    token:           &str,
-    hf_dataset_repo: &str,
-    job_id:          Uuid,
-    zip_bytes:       &[u8],
+/// Upload `zip_path` to the HF bucket `bucket_id` via the `huggingface_hub`
+/// Python library (subprocess). Returns the public HTTPS download URL.
+async fn upload_zip_to_bucket(
+    token:        &str,
+    bucket_id:    &str,
+    zip_path:     &Path,
+    filename:     &str,
 ) -> Result<String> {
-    ensure_hf_dataset_repo(client, token, hf_dataset_repo).await?;
+    // Pass data through argv (not embedded in the script string) to avoid
+    // shell injection; token goes via env-var so it never touches the script.
+    let script = r#"
+import os, sys
+from huggingface_hub import HfApi, batch_bucket_files
+bucket_id = sys.argv[1]
+zip_path  = sys.argv[2]
+filename  = sys.argv[3]
+api = HfApi()
+try:
+    api.create_bucket(bucket_id, exist_ok=True)
+except Exception as e:
+    print(f"Warning: create_bucket: {e}", file=sys.stderr)
+batch_bucket_files(bucket_id, add=[(zip_path, filename)])
+print(f"https://huggingface.co/buckets/{bucket_id}/{filename}")
+"#;
 
-    let filename = format!("batch_{job_id}.zip");
+    let output = tokio::process::Command::new("/opt/hfvenv/bin/python3")
+        .arg("-c")
+        .arg(script)
+        .arg(bucket_id)
+        .arg(zip_path)
+        .arg(filename)
+        .env("HF_TOKEN", token)
+        .output()
+        .await
+        .map_err(|e| anyhow!("Failed to run python3: {e}"))?;
 
-    if zip_bytes.len() <= HF_INLINE_LIMIT {
-        commit_inline(client, token, hf_dataset_repo, &filename, zip_bytes).await?;
-    } else {
-        upload_lfs_and_commit(client, token, hf_dataset_repo, &filename, zip_bytes).await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("Bucket upload failed: {stderr}"));
     }
 
-    Ok(format!(
-        "https://huggingface.co/datasets/{hf_dataset_repo}/resolve/main/{filename}"
-    ))
-}
-
-/// Inline base64 commit — for files ≤ 10 MB.
-async fn commit_inline(
-    client:  &Client,
-    token:   &str,
-    repo_id: &str,
-    path:    &str,
-    bytes:   &[u8],
-) -> Result<()> {
-    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-    let ndjson = format!(
-        "{}\n{}\n",
-        serde_json::to_string(&serde_json::json!({
-            "key":   "header",
-            "value": { "summary": format!("Add {path}"), "description": "avagen batch results" }
-        }))?,
-        serde_json::to_string(&serde_json::json!({
-            "key":   "file",
-            "value": { "path": path, "encoding": "base64", "content": b64 }
-        }))?,
-    );
-
-    let resp = client
-        .post(format!("https://huggingface.co/api/datasets/{repo_id}/commit/main"))
-        .bearer_auth(token)
-        .header("Content-Type", "application/x-ndjson")
-        .body(ndjson)
-        .send()
-        .await?;
-
-    if !resp.status().is_success() {
-        let st   = resp.status().as_u16();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(anyhow!("HF inline commit failed ({st}): {body}"));
-    }
-    Ok(())
-}
-
-/// LFS upload + pointer commit — for files > 10 MB.
-async fn upload_lfs_and_commit(
-    client:  &Client,
-    token:   &str,
-    repo_id: &str,
-    path:    &str,
-    bytes:   &[u8],
-) -> Result<()> {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let sha256 = hex::encode(hasher.finalize());
-    let size   = bytes.len() as u64;
-
-    let lfs_url = format!(
-        "https://huggingface.co/datasets/{repo_id}.git/info/lfs/objects/batch"
-    );
-    let lfs_resp: serde_json::Value = client
-        .post(&lfs_url)
-        .bearer_auth(token)
-        .header("Content-Type", "application/vnd.git-lfs+json")
-        .header("Accept",       "application/vnd.git-lfs+json")
-        .json(&serde_json::json!({
-            "operation": "upload",
-            "transfers": ["basic"],
-            "objects":   [{ "oid": &sha256, "size": size }],
-            "hash_algo": "sha256",
-        }))
-        .send()
-        .await?
-        .json()
-        .await?;
-
-    // If server already has the object, `actions` will be absent
-    if let Some(actions) = lfs_resp["objects"][0].get("actions") {
-        let upload_href = actions["upload"]["href"]
-            .as_str()
-            .ok_or_else(|| anyhow!("No upload href in LFS response"))?;
-
-        let mut upload_req = client.put(upload_href).body(bytes.to_vec());
-        if let Some(headers) = actions["upload"]["header"].as_object() {
-            for (k, v) in headers {
-                if let Some(v_str) = v.as_str() {
-                    upload_req = upload_req.header(k.as_str(), v_str);
-                }
-            }
-        }
-
-        let upload_resp = upload_req.send().await?;
-        if !upload_resp.status().is_success() {
-            let body = upload_resp.text().await.unwrap_or_default();
-            return Err(anyhow!("LFS storage upload failed: {body}"));
-        }
-    }
-
-    let ndjson = format!(
-        "{}\n{}\n",
-        serde_json::to_string(&serde_json::json!({
-            "key":   "header",
-            "value": { "summary": format!("Add {path}"), "description": "avagen batch results" }
-        }))?,
-        serde_json::to_string(&serde_json::json!({
-            "key":   "lfsFile",
-            "value": { "path": path, "algo": "sha256", "oid": sha256, "size": size }
-        }))?,
-    );
-
-    let resp = client
-        .post(format!("https://huggingface.co/api/datasets/{repo_id}/commit/main"))
-        .bearer_auth(token)
-        .header("Content-Type", "application/x-ndjson")
-        .body(ndjson)
-        .send()
-        .await?;
-
-    if !resp.status().is_success() {
-        let st   = resp.status().as_u16();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(anyhow!("HF LFS commit failed ({st}): {body}"));
-    }
-    Ok(())
+    // Take the last non-empty line (the URL we printed)
+    let url = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .last()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    Ok(url)
 }
 
 // ── Single-image generator ────────────────────────────────────────────────────
@@ -542,6 +424,7 @@ struct StatusResp { generations: Vec<Gen> }
 #[derive(Deserialize)]
 struct Gen        { img: String }
 
+/// Retry wrapper — up to 3 Stable Horde attempts per image with a new seed.
 async fn generate_one(
     client: &Client,
     req:    &BulkRequest,
@@ -552,6 +435,27 @@ async fn generate_one(
         return generate_one_local(client, req, seed, out).await;
     }
 
+    let mut current_seed = seed;
+    for attempt in 1u32..=3 {
+        match try_generate_horde(client, req, current_seed, out).await {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt < 3 => {
+                tracing::warn!("Horde attempt {attempt}/3 failed: {e} — retrying in 5s");
+                sleep(Duration::from_secs(5)).await;
+                current_seed = rand::random();
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!()
+}
+
+async fn try_generate_horde(
+    client: &Client,
+    req:    &BulkRequest,
+    seed:   u64,
+    out:    &Path,
+) -> Result<()> {
     let avatar      = make_avatar_request(req);
     let prompt      = avatar.to_prompt();
     let full_prompt = if req.model.use_negative() {
@@ -589,7 +493,7 @@ async fn generate_one(
     }
 
     let horde_id = resp.json::<AsyncResp>().await?.id;
-    let deadline = Instant::now() + Duration::from_secs(300);
+    let deadline = Instant::now() + Duration::from_secs(900);
     sleep(Duration::from_secs(3)).await;
 
     loop {
@@ -603,7 +507,7 @@ async fn generate_one(
         }
         if check.done { break; }
         if Instant::now() > deadline {
-            return Err(anyhow!("Horde timed out after 300s"));
+            return Err(anyhow!("Horde timed out after 900s"));
         }
         sleep(Duration::from_secs(3)).await;
     }
