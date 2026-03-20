@@ -45,6 +45,10 @@ async fn main() {
         std::process::exit(1);
     });
 
+    if let Err(e) = bulk_pipeline.recover_jobs().await {
+        tracing::error!("Job recovery failed: {e:#}");
+    }
+
     // ── Video pipeline ───────────────────────────────────────────────────────
     let skip_video = std::env
         ::var("SKIP_VIDEO_PIPELINE")

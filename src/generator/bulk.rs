@@ -194,7 +194,10 @@ impl BulkPipeline {
         let job_id    = Uuid::new_v4();
         let save_path = self.save_dir.join(job_id.to_string());
 
-        db::create_batch_job(&self.pool, job_id, req.count as i64, req.model.db_name(), &api_key_id)
+        let req_json = serde_json::to_value(&req)
+            .map_err(|e| anyhow!("Failed to serialize request: {e}"))?;
+
+        db::create_batch_job(&self.pool, job_id, req.count as i64, req.model.db_name(), &api_key_id, &req_json)
             .await
             .map_err(|e| anyhow!("DB error inserting batch job: {e}"))?;
 
@@ -235,6 +238,67 @@ impl BulkPipeline {
             .await
             .map(|rows| rows.into_iter().map(BatchJobStatus::from).collect())
             .map_err(|e| anyhow!("DB error: {e}"))
+    }
+
+    /// Called once at startup: resets any interrupted jobs back to `queued` and
+    /// re-spawns their background tasks so the queue continues where it left off.
+    pub async fn recover_jobs(&self) -> Result<()> {
+        // Any job that was mid-flight when the process died gets reset to queued.
+        // Progress is cleared because ephemeral temp files are gone after restart.
+        let reset = sqlx::query_scalar::<_, i64>(
+            "WITH updated AS (
+                UPDATE batch_jobs
+                SET state        = 'queued',
+                    completed    = 0,
+                    failed_count = 0,
+                    updated_at   = NOW()
+                WHERE state IN ('running', 'uploading')
+                RETURNING 1
+            ) SELECT COUNT(*) FROM updated"
+        )
+        .fetch_one(&self.pool).await
+        .unwrap_or(0);
+
+        if reset > 0 {
+            tracing::warn!("Recovery: reset {reset} interrupted job(s) back to queued");
+        }
+
+        // Fetch all queued jobs (including the ones we just reset) and re-spawn them.
+        let pending = db::list_pending_jobs(&self.pool).await
+            .map_err(|e| anyhow!("DB error listing pending jobs: {e}"))?;
+
+        let count = pending.len();
+        for row in pending {
+            let req: BulkRequest = match row.request_json.as_ref()
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+            {
+                Some(r) => r,
+                None => {
+                    tracing::error!(job_id = %row.id, "Missing/invalid request_json — marking failed");
+                    let _ = db::fail_batch_job(&self.pool, row.id, "request_json missing after restart").await;
+                    continue;
+                }
+            };
+
+            let save_path    = self.save_dir.join(row.id.to_string());
+            let client       = self.client.clone();
+            let pool         = self.pool.clone();
+            let hf_token     = self.hf_token.clone();
+            let hf_bucket_id = self.hf_bucket_id.clone();
+            let semaphore    = self.job_semaphore.clone();
+
+            tokio::spawn(async move {
+                run_job(client, pool, row.id, req, save_path, hf_token, hf_bucket_id, semaphore).await;
+            });
+        }
+
+        if count > 0 {
+            tracing::info!("Recovery: re-queued {count} pending job(s)");
+        } else {
+            tracing::info!("Recovery: no pending jobs found");
+        }
+
+        Ok(())
     }
 }
 

@@ -66,9 +66,12 @@ pub async fn init_pool(database_url: &str) -> PgPool {
         .execute(&pool).await
         .expect("Failed to create batch_jobs table");
 
-    // Idempotent migration: add api_key_id to existing batch_jobs rows
+    // Idempotent migrations
     let _ = sqlx::query(
         "ALTER TABLE batch_jobs ADD COLUMN IF NOT EXISTS api_key_id TEXT NOT NULL DEFAULT ''"
+    ).execute(&pool).await;
+    let _ = sqlx::query(
+        "ALTER TABLE batch_jobs ADD COLUMN IF NOT EXISTS request_json JSONB"
     ).execute(&pool).await;
 
     pool
@@ -208,25 +211,47 @@ pub struct BatchJobRow {
     /// 1-based global queue position across all active jobs.
     /// NULL for jobs that are already done or failed.
     pub queue_position: Option<i64>,
+    /// Full original request payload stored for crash recovery.
+    pub request_json:   Option<serde_json::Value>,
 }
 
 pub async fn create_batch_job(
-    pool:       &PgPool,
-    id:         uuid::Uuid,
-    total:      i64,
-    model:      &str,
-    api_key_id: &str,
+    pool:         &PgPool,
+    id:           uuid::Uuid,
+    total:        i64,
+    model:        &str,
+    api_key_id:   &str,
+    request_json: &serde_json::Value,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO batch_jobs (id, total, model, state, api_key_id)
-         VALUES ($1, $2, $3, 'queued', $4)"
+        "INSERT INTO batch_jobs (id, total, model, state, api_key_id, request_json)
+         VALUES ($1, $2, $3, 'queued', $4, $5)"
     )
     .bind(id)
     .bind(total)
     .bind(model)
     .bind(api_key_id)
+    .bind(request_json)
     .execute(pool).await?;
     Ok(())
+}
+
+/// Returns all jobs still in the queue (queued) along with their stored request.
+/// Used on startup to resume interrupted jobs.
+#[derive(Debug, sqlx::FromRow)]
+pub struct PendingJobRow {
+    pub id:           uuid::Uuid,
+    pub total:        i64,
+    pub request_json: Option<serde_json::Value>,
+}
+
+pub async fn list_pending_jobs(pool: &PgPool) -> Result<Vec<PendingJobRow>, sqlx::Error> {
+    sqlx::query_as::<_, PendingJobRow>(
+        "SELECT id, total, request_json FROM batch_jobs
+         WHERE state = 'queued'
+         ORDER BY created_at ASC"
+    )
+    .fetch_all(pool).await
 }
 
 pub async fn update_batch_job_progress(
