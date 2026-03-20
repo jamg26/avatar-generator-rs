@@ -1,0 +1,66 @@
+name: Deploy to HuggingFace Spaces
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to HuggingFace Spaces
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git push https://jamg:${HF_TOKEN}@huggingface.co/spaces/jamg/avagen main --force
+
+      - name: Sync Space secrets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ADMIN_SECRET: ${{ secrets.ADMIN_SECRET }}
+          REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
+          STABLE_HORDE_KEY: ${{ secrets.STABLE_HORDE_KEY }}
+          HF_BUCKET_ID: ${{ secrets.HF_BUCKET_ID }}
+        run: |
+          pip install -q huggingface_hub
+          python - <<'EOF'
+          import os
+          from huggingface_hub import HfApi
+
+          SPACE_ID = "jamg/avagen"
+          api = HfApi(token=os.environ["HF_TOKEN"])
+
+          api.create_repo(
+              repo_id=SPACE_ID,
+              repo_type="space",
+              space_sdk="docker",
+              private=False,
+              exist_ok=True,
+          )
+
+          secrets = {
+              "DATABASE_URL":        os.environ.get("DATABASE_URL"),
+              "ADMIN_SECRET":        os.environ.get("ADMIN_SECRET"),
+              "HF_TOKEN":            os.environ["HF_TOKEN"],
+              "REPLICATE_API_TOKEN": os.environ.get("REPLICATE_API_TOKEN"),
+              "STABLE_HORDE_KEY":    os.environ.get("STABLE_HORDE_KEY"),
+              "HF_BUCKET_ID":        os.environ.get("HF_BUCKET_ID"),
+          }
+          for key, value in secrets.items():
+              if value:
+                  api.add_space_secret(repo_id=SPACE_ID, key=key, value=value)
+                  print(f"  secret synced: {key}")
+          EOF

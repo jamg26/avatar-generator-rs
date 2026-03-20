@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::{anyhow, Result};
 use base64::Engine;
+use chrono::Utc;
 use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -80,6 +81,10 @@ pub struct BulkRequest {
     pub concurrency: usize,
     #[serde(default)]
     pub model: BulkModel,
+    /// Output image size in pixels (128–1500). Rounded to nearest multiple of 64.
+    /// Defaults to 512 if omitted.
+    #[serde(default)]
+    pub size: Option<usize>,
 }
 
 fn default_concurrency() -> usize { 1 }
@@ -101,12 +106,20 @@ pub struct BatchJobStatus {
     pub total:        usize,
     pub completed:    usize,
     pub failed:       usize,
+    /// Seconds elapsed since the job was created.
+    /// For finished jobs (done/failed) this is the total wall-clock duration.
+    /// For in-progress jobs this is the time elapsed so far.
+    pub elapsed_secs: u64,
     /// HF bucket download URL — present once the job reaches `done`.
     pub download_url: Option<String>,
 }
 
 impl From<crate::db::BatchJobRow> for BatchJobStatus {
     fn from(row: crate::db::BatchJobRow) -> Self {
+        let elapsed_secs = match row.state.as_str() {
+            "done" | "failed" => (row.updated_at - row.created_at).num_seconds().max(0) as u64,
+            _                 => (Utc::now()     - row.created_at).num_seconds().max(0) as u64,
+        };
         Self {
             job_id: row.id,
             state: match row.state.as_str() {
@@ -119,6 +132,7 @@ impl From<crate::db::BatchJobRow> for BatchJobStatus {
             total:        row.total as usize,
             completed:    row.completed as usize,
             failed:       row.failed_count as usize,
+            elapsed_secs,
             download_url: row.download_url,
         }
     }
@@ -176,6 +190,7 @@ impl BulkPipeline {
             total:        req.count,
             completed:    0,
             failed:       0,
+            elapsed_secs: 0,
             download_url: None,
         };
 
@@ -477,21 +492,24 @@ async fn try_generate_horde(
         prompt
     };
 
+    let size_raw = req.size.unwrap_or(512).clamp(128, 1500);
+    let size     = ((size_raw + 32) / 64) * 64;
+
     let resp = client
         .post(format!("{HORDE_API}/generate/async"))
         .json(&serde_json::json!({
             "prompt": full_prompt,
             "params": {
                 "steps":        req.model.steps(),
-                "width":        512,
-                "height":       512,
+                "width":        size,
+                "height":       size,
                 "n":            1,
                 "sampler_name": "k_euler",
                 "cfg_scale":    req.model.guidance(),
                 "seed":         seed.to_string(),
             },
             "nsfw":         false,
-            "censor_nsfw":  false,
+            "censor_nsfw":  true,
             "slow_workers": true,
             "models":       [req.model.horde_name()],
             "r2":           true,
@@ -566,10 +584,13 @@ async fn generate_one_local(
     let avatar = make_avatar_request(req);
     let prompt = avatar.to_prompt();
 
+    let size_raw = req.size.unwrap_or(512).clamp(128, 1500);
+    let size     = ((size_raw + 32) / 64) * 64;
+
     let resp = client
         .post(format!("{gpu_url}/generate"))
         .timeout(Duration::from_secs(120))
-        .json(&GpuReq { prompt: &prompt, width: 512, height: 512, steps: 4, seed })
+        .json(&GpuReq { prompt: &prompt, width: size as u32, height: size as u32, steps: 4, seed })
         .send()
         .await
         .map_err(|e| anyhow!(
@@ -607,7 +628,7 @@ fn make_avatar_request(req: &BulkRequest) -> AvatarRequest {
         background:  Background::Studio,
         style:       ArtStyle::Photorealistic,
         format:      ImageFormat::Jpeg,
-        size:        Some(512),
+        size:        req.size.or(Some(512)),
         seed:        None,
         shot_type:   ShotType::Headshot,
     }
