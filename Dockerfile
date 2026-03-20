@@ -15,6 +15,7 @@ RUN mkdir -p src && echo 'fn main() {}' > src/main.rs && \
 
 # Compile with the real source
 COPY src ./src
+COPY admin ./admin
 RUN cargo build --release
 
 # ── Stage 2: Minimal runtime image ──────────────────────────────────────────
