@@ -54,5 +54,13 @@ anyhow = "1"
 # Zip archive creation
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+[[bin]]
+name = "avagen"
+path = "src/main.rs"
+
+[[bin]]
+name = "avagen-admin"
+path = "src/bin/admin.rs"
+
 [features]
 default = []

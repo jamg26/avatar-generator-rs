@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AvaGen Admin</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+  <style>
+    [x-cloak]{display:none!important}
+    *{box-sizing:border-box}
+    ::-webkit-scrollbar{width:5px;height:5px}
+    ::-webkit-scrollbar-track{background:#020617}
+    ::-webkit-scrollbar-thumb{background:#334155;border-radius:3px}
+    ::-webkit-scrollbar-thumb:hover{background:#475569}
+    .chart-wrap{position:relative;height:220px}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .spin{animation:spin .8s linear infinite}
+    @keyframes fadein{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+    .fadein{animation:fadein .18s ease}
+    @keyframes pulsedot{0%,100%{opacity:1}50%{opacity:.35}}
+    .pulsedot{animation:pulsedot 2s ease-in-out infinite}
+  </style>
+</head>
+
+<body class="bg-[#020617] text-slate-100 antialiased"
+      x-data="app()" x-init="init()" x-cloak>
+
+<!-- ═══════════════════════════════════════════════════════ LOGIN ══════════ -->
+<div x-show="!authed"
+     x-transition:enter="transition duration-200" x-transition:enter-start="opacity-0"
+     class="min-h-screen flex items-center justify-center px-4">
+  <div class="w-full max-w-sm">
+    <!-- logo -->
+    <div class="flex flex-col items-center mb-8">
+      <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center mb-4 shadow-lg shadow-indigo-500/30">
+        <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <circle cx="12" cy="8" r="4"/><path d="M6 20v-2a6 6 0 0 1 12 0v2"/>
+        </svg>
+      </div>
+      <h1 class="text-2xl font-bold">AvaGen Admin</h1>
+      <p class="text-slate-400 text-sm mt-1">Secure control panel</p>
+    </div>
+    <!-- card -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-7 shadow-2xl shadow-black/60">
+      <form @submit.prevent="login()">
+        <label class="block text-sm font-medium text-slate-300 mb-2">Admin Secret</label>
+        <input x-model="loginSecret" type="password" placeholder="Enter admin secret"
+               :disabled="loginBusy"
+               class="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition disabled:opacity-50">
+        <div x-show="loginErr" class="mt-3 flex items-center gap-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-2.5">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <span x-text="loginErr"></span>
+        </div>
+        <button type="submit" :disabled="loginBusy || !loginSecret"
+                class="mt-4 w-full bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl py-3 flex items-center justify-center gap-2 transition-colors">
+          <svg x-show="loginBusy" class="w-4 h-4 spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+          <span x-text="loginBusy ? 'Signing in…' : 'Sign In'"></span>
+        </button>
+      </form>
+    </div>
+    <p class="text-center text-slate-700 text-xs mt-4">AvaGen Admin · localhost only</p>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ APP SHELL ═════ -->
+<div x-show="authed" class="flex h-screen overflow-hidden">
+
+  <!-- ── Sidebar ──────────────────────────────────────────────────────────── -->
+  <aside class="w-56 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0">
+    <!-- logo -->
+    <div class="h-16 flex items-center gap-3 px-5 border-b border-slate-800 shrink-0">
+      <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shrink-0">
+        <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+          <circle cx="12" cy="8" r="4"/><path d="M6 20v-2a6 6 0 0 1 12 0v2"/>
+        </svg>
+      </div>
+      <div class="min-w-0">
+        <div class="text-sm font-semibold leading-tight">AvaGen</div>
+        <div class="text-xs text-slate-500 leading-tight">Admin Panel</div>
+      </div>
+    </div>
+
+    <!-- nav -->
+    <nav class="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
+      <template x-for="item in navItems" :key="item.id">
+        <button @click="navigate(item.id)"
+                :class="sec===item.id ? 'bg-slate-800 text-slate-100' : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'"
+                class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors">
+          <span class="w-4 h-4 shrink-0" x-html="item.icon"></span>
+          <span x-text="item.label"></span>
+          <!-- badge -->
+          <span x-show="item.badge && item.badge() > 0"
+                class="ml-auto text-xs bg-indigo-500/20 text-indigo-400 rounded-full px-2 py-0.5"
+                x-text="item.badge()"></span>
+        </button>
+      </template>
+      <div class="!mt-3 h-px bg-slate-800"></div>
+      <button @click="navigate('system')"
+              :class="sec==='system' ? 'bg-slate-800 text-slate-100' : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'"
+              class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors">
+        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+        <span>System</span>
+      </button>
+    </nav>
+
+    <!-- health dot -->
+    <div class="p-3 border-t border-slate-800 shrink-0">
+      <div class="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-slate-800/50">
+        <span :class="dotClass(dash?.health)" class="pulsedot w-2 h-2 rounded-full shrink-0"></span>
+        <span class="text-xs text-slate-400 truncate capitalize" x-text="`API: ${dash?.health ?? '…'}`"></span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Main area ─────────────────────────────────────────────────────────── -->
+  <div class="flex-1 flex flex-col overflow-hidden">
+
+    <!-- header -->
+    <header class="h-16 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-6 shrink-0">
+      <div>
+        <h1 class="text-sm font-semibold" x-text="pageTitle[sec]"></h1>
+        <p class="text-xs text-slate-500 mt-0.5" x-text="pageDesc[sec]"></p>
+      </div>
+      <div class="flex items-center gap-2">
+        <!-- auto-refresh toggle (jobs / dashboard) -->
+        <div x-show="sec==='jobs'||sec==='dashboard'" class="flex items-center gap-2 mr-1">
+          <span class="text-xs text-slate-500">Auto-refresh</span>
+          <button @click="toggleAuto()"
+                  :class="autoOn ? 'bg-indigo-500' : 'bg-slate-700'"
+                  class="relative w-9 h-5 rounded-full transition-colors focus:outline-none shrink-0">
+            <span :class="autoOn ? 'translate-x-4' : 'translate-x-0.5'"
+                  class="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform"></span>
+          </button>
+        </div>
+        <!-- refresh -->
+        <button @click="navigate(sec)"
+                class="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm transition-colors">
+          <svg :class="busy ? 'spin':''" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21.5 2v6h-6"/><path d="M2.5 12a10 10 0 0 1 18.8-4.3"/><path d="M2.5 22v-6h6"/><path d="M21.5 12a10 10 0 0 1-18.8 4.3"/></svg>
+          Refresh
+        </button>
+        <!-- new key -->
+        <button x-show="sec==='keys'" @click="showCreate=true"
+                class="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500 hover:bg-indigo-400 text-white rounded-lg text-sm font-medium transition-colors">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New Key
+        </button>
+        <!-- logout -->
+        <button @click="logout()"
+                class="flex items-center gap-1.5 px-3 py-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg text-sm transition-colors">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          Sign Out
+        </button>
+      </div>
+    </header>
+
+    <!-- content -->
+    <main class="flex-1 overflow-y-auto p-6 bg-[#020617]">
+
+      <!-- ══════════════════════════════════════ DASHBOARD ════════════════ -->
+      <div x-show="sec==='dashboard'" class="space-y-5">
+        <!-- stat cards -->
+        <div class="grid grid-cols-2 xl:grid-cols-4 gap-4">
+          <!-- Total Keys -->
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+            <div class="flex items-start justify-between mb-3">
+              <p class="text-xs font-medium text-slate-400 uppercase tracking-wide">Total Keys</p>
+              <div class="w-8 h-8 bg-blue-500/10 rounded-lg flex items-center justify-center">
+                <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>
+              </div>
+            </div>
+            <p class="text-3xl font-bold" x-text="n(dash?.keys?.total)"></p>
+            <div class="mt-2 flex items-center gap-2 text-xs">
+              <span class="text-emerald-400" x-text="n(dash?.keys?.active)+' active'"></span>
+              <span class="text-slate-600">·</span>
+              <span class="text-slate-500" x-text="n((dash?.keys?.total??0)-(dash?.keys?.active??0))+' revoked'"></span>
+            </div>
+          </div>
+          <!-- Today -->
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+            <div class="flex items-start justify-between mb-3">
+              <p class="text-xs font-medium text-slate-400 uppercase tracking-wide">Today</p>
+              <div class="w-8 h-8 bg-indigo-500/10 rounded-lg flex items-center justify-center">
+                <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+              </div>
+            </div>
+            <p class="text-3xl font-bold" x-text="n(dash?.requests?.today)"></p>
+            <p class="text-xs text-slate-500 mt-2">Requests today</p>
+          </div>
+          <!-- This Month -->
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+            <div class="flex items-start justify-between mb-3">
+              <p class="text-xs font-medium text-slate-400 uppercase tracking-wide">This Month</p>
+              <div class="w-8 h-8 bg-purple-500/10 rounded-lg flex items-center justify-center">
+                <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+              </div>
+            </div>
+            <p class="text-3xl font-bold" x-text="n(dash?.requests?.month)"></p>
+            <p class="text-xs text-slate-500 mt-2">Total requests</p>
+          </div>
+          <!-- Active Jobs -->
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+            <div class="flex items-start justify-between mb-3">
+              <p class="text-xs font-medium text-slate-400 uppercase tracking-wide">Active Jobs</p>
+              <div class="w-8 h-8 bg-amber-500/10 rounded-lg flex items-center justify-center">
+                <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+              </div>
+            </div>
+            <p class="text-3xl font-bold" x-text="n(dash?.active_jobs)"></p>
+            <p class="text-xs text-slate-500 mt-2">Queued or running</p>
+          </div>
+        </div>
+
+        <!-- recent activity -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+          <div class="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
+            <h2 class="text-sm font-semibold">Recent Activity</h2>
+            <span class="text-xs text-slate-500">Last 15 requests</span>
+          </div>
+          <div x-show="!dash?.recent_activity?.length" class="py-14 flex flex-col items-center gap-3">
+            <svg class="w-10 h-10 text-slate-700" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            <p class="text-slate-500 text-sm">No activity yet</p>
+          </div>
+          <div x-show="dash?.recent_activity?.length" class="overflow-x-auto">
+            <table class="w-full">
+              <thead><tr class="border-b border-slate-800">
+                <th class="text-left text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3">Time</th>
+                <th class="text-left text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3">Key</th>
+                <th class="text-left text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3">Endpoint</th>
+                <th class="text-right text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3">Count</th>
+              </tr></thead>
+              <tbody class="divide-y divide-slate-800/50">
+                <template x-for="r in (dash?.recent_activity||[])" :key="r.created_at+r.api_key_id">
+                  <tr class="hover:bg-slate-800/30 transition-colors">
+                    <td class="px-5 py-3 text-xs text-slate-400 whitespace-nowrap" x-text="ago(r.created_at)"></td>
+                    <td class="px-5 py-3">
+                      <div class="flex items-center gap-2">
+                        <span class="text-sm text-slate-200" x-text="r.name||'Unknown'"></span>
+                        <code class="text-xs text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded" x-text="r.key_prefix||'—'"></code>
+                      </div>
+                    </td>
+                    <td class="px-5 py-3"><code class="text-xs text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded" x-text="r.endpoint||'—'"></code></td>
+                    <td class="px-5 py-3 text-right text-sm font-mono text-slate-300" x-text="n(r.count)"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div x-show="busy&&!dash" class="flex justify-center py-16"><svg class="w-7 h-7 text-indigo-400 spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg></div>
+      </div>
+
+      <!-- ══════════════════════════════════════ API KEYS ═════════════════ -->
+      <div x-show="sec==='keys'" class="space-y-4">
+        <!-- search + count -->
+        <div class="flex items-center gap-3">
+          <div class="relative flex-1 max-w-xs">
+            <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input x-model="keyQ" type="text" placeholder="Search keys…"
+                   class="w-full bg-slate-900 border border-slate-800 rounded-lg pl-9 pr-4 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+          </div>
+          <span class="text-sm text-slate-500" x-text="filteredKeys.length+' key'+(filteredKeys.length!==1?'s':'')"></span>
+        </div>
+        <!-- table -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+          <!-- empty -->
+          <div x-show="!busyKeys&&!filteredKeys.length" class="py-16 flex flex-col items-center gap-3">
+            <svg class="w-12 h-12 text-slate-700" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>
+            <p class="text-slate-500 text-sm font-medium">No API keys found</p>
+            <button @click="showCreate=true" class="mt-1 px-4 py-2 bg-indigo-500 hover:bg-indigo-400 text-white text-sm rounded-lg transition-colors">Create Key</button>
+          </div>
+          <!-- loading -->
+          <div x-show="busyKeys" class="flex justify-center py-16"><svg class="w-7 h-7 text-indigo-400 spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg></div>
+          <!-- table -->
+          <div x-show="!busyKeys&&filteredKeys.length" class="overflow-x-auto">
+            <table class="w-full">
+              <thead><tr class="border-b border-slate-800 bg-[#020617]/60">
+                <th class="text-left text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3.5">Name</th>
+                <th class="text-left text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3.5">Prefix</th>
+                <th class="text-left text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3.5">Status</th>
+                <th class="text-left text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3.5">Month Usage</th>
+                <th class="text-left text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3.5">Quota</th>
+                <th class="text-left text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3.5">Total</th>
+                <th class="text-left text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3.5">Created</th>
+                <th class="text-right text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3.5">Actions</th>
+              </tr></thead>
+              <tbody class="divide-y divide-slate-800/50">
+                <template x-for="k in filteredKeys" :key="k.id">
+                  <tr class="hover:bg-slate-800/30 transition-colors">
+                    <td class="px-5 py-4 text-sm font-medium text-slate-200" x-text="k.name"></td>
+                    <td class="px-5 py-4"><code class="text-xs text-slate-400 font-mono bg-slate-800 px-2 py-1 rounded" x-text="k.key_prefix||'—'"></code></td>
+                    <td class="px-5 py-4">
+                      <span :class="k.is_active?'bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20':'bg-red-500/10 text-red-400 ring-1 ring-red-500/20'"
+                            class="text-xs font-medium px-2.5 py-1 rounded-full" x-text="k.is_active?'Active':'Revoked'"></span>
+                    </td>
+                    <td class="px-5 py-4">
+                      <div class="flex flex-col gap-1.5">
+                        <div class="flex items-center gap-2">
+                          <span class="text-sm font-mono text-slate-200" x-text="n(k.monthly_used)"></span>
+                          <span class="text-xs text-slate-500" x-text="'/ '+n(k.monthly_quota)"></span>
+                        </div>
+                        <div class="w-28 bg-slate-700 rounded-full h-1.5">
+                          <div class="h-1.5 rounded-full transition-all"
+                               :class="qpct(k)>=90?'bg-red-500':qpct(k)>=70?'bg-amber-500':'bg-emerald-500'"
+                               :style="'width:'+Math.min(qpct(k),100)+'%'"></div>
+                        </div>
+                      </div>
+                    </td>
+                    <td class="px-5 py-4 text-sm text-slate-400 font-mono" x-text="n(k.monthly_quota)"></td>
+                    <td class="px-5 py-4 text-sm text-slate-400 font-mono" x-text="n(k.total_used)"></td>
+                    <td class="px-5 py-4 text-xs text-slate-500 whitespace-nowrap" x-text="fmtDate(k.created_at)"></td>
+                    <td class="px-5 py-4 text-right">
+                      <button x-show="k.is_active" @click="askRevoke(k)"
+                              class="text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10 px-3 py-1.5 rounded-lg transition-colors">Revoke</button>
+                      <span x-show="!k.is_active" class="text-xs text-slate-700">—</span>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════ ANALYTICS ════════════════ -->
+      <div x-show="sec==='analytics'" class="space-y-5">
+        <!-- day range -->
+        <div class="flex items-center gap-2">
+          <span class="text-sm text-slate-400">Show last:</span>
+          <template x-for="d in [7,14,30]" :key="d">
+            <button @click="mDays=d;loadMetrics()"
+                    :class="mDays===d?'bg-indigo-500 text-white':'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200'"
+                    class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors" x-text="d+'d'"></button>
+          </template>
+        </div>
+        <!-- charts row -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+            <h3 class="text-sm font-semibold mb-4">Daily Requests</h3>
+            <div class="chart-wrap"><canvas id="cDaily"></canvas></div>
+          </div>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+            <h3 class="text-sm font-semibold mb-1">Requests by Hour <span class="text-xs text-slate-500 font-normal">(today)</span></h3>
+            <div class="chart-wrap"><canvas id="cHourly"></canvas></div>
+          </div>
+        </div>
+        <!-- per-key quota -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+          <div class="px-5 py-4 border-b border-slate-800"><h3 class="text-sm font-semibold">Per-Key Usage · This Month</h3></div>
+          <div x-show="!metrics?.per_key?.length" class="py-10 text-center"><p class="text-slate-500 text-sm">No usage data yet</p></div>
+          <div class="divide-y divide-slate-800/50">
+            <template x-for="k in (metrics?.per_key||[])" :key="k.key_prefix">
+              <div class="px-5 py-4 flex items-center gap-4">
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-2 mb-2">
+                    <span class="text-sm font-medium text-slate-200" x-text="k.name"></span>
+                    <code class="text-xs text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded font-mono" x-text="k.key_prefix"></code>
+                  </div>
+                  <div class="flex items-center gap-3">
+                    <div class="flex-1 bg-slate-700 rounded-full h-2">
+                      <div class="h-2 rounded-full transition-all duration-500"
+                           :class="(k.monthly_quota>0?k.used/k.monthly_quota:0)>=.9?'bg-red-500':(k.monthly_quota>0?k.used/k.monthly_quota:0)>=.7?'bg-amber-500':'bg-indigo-500'"
+                           :style="'width:'+Math.min(k.monthly_quota>0?Math.round(k.used/k.monthly_quota*100):0,100)+'%'"></div>
+                    </div>
+                    <span class="text-xs text-slate-400 whitespace-nowrap"
+                          x-text="n(k.used)+' / '+n(k.monthly_quota)+' ('+( k.monthly_quota>0?Math.round(k.used/k.monthly_quota*100):0 )+'%)'"></span>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+        <!-- top endpoints -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+          <div class="px-5 py-4 border-b border-slate-800">
+            <h3 class="text-sm font-semibold">Top Endpoints <span class="text-xs text-slate-500 font-normal">(last 30 days)</span></h3>
+          </div>
+          <div x-show="!metrics?.endpoints?.length" class="py-10 text-center"><p class="text-slate-500 text-sm">No data yet</p></div>
+          <div class="divide-y divide-slate-800/50">
+            <template x-for="(ep,i) in (metrics?.endpoints||[])" :key="ep.endpoint">
+              <div class="px-5 py-3.5 flex items-center gap-4">
+                <span class="text-xs text-slate-600 font-mono w-4 text-right" x-text="i+1"></span>
+                <code class="flex-1 text-sm text-indigo-400 bg-indigo-500/5 px-2 py-0.5 rounded" x-text="ep.endpoint"></code>
+                <span class="text-sm font-mono text-slate-300" x-text="n(ep.n)"></span>
+              </div>
+            </template>
+          </div>
+        </div>
+        <div x-show="busyM&&!metrics" class="flex justify-center py-16"><svg class="w-7 h-7 text-indigo-400 spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg></div>
+      </div>
+
+      <!-- ══════════════════════════════════════ BATCH JOBS ═══════════════ -->
+      <div x-show="sec==='jobs'" class="space-y-4">
+        <!-- filter tabs -->
+        <div class="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded-xl p-1 w-fit">
+          <template x-for="f in ['all','queued','running','uploading','done','failed']" :key="f">
+            <button @click="jobF=f"
+                    :class="jobF===f?'bg-slate-700 text-slate-100 shadow-sm':'text-slate-400 hover:text-slate-200'"
+                    class="px-3 py-1.5 rounded-lg text-xs font-medium transition-all capitalize"
+                    x-text="f==='all'?'All ('+jobs.length+')':f+' ('+jobs.filter(j=>j.state===f).length+')'"></button>
+          </template>
+        </div>
+        <!-- table -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+          <div x-show="!busyJ&&!filteredJobs.length" class="py-16 flex flex-col items-center gap-3">
+            <svg class="w-12 h-12 text-slate-700" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+            <p class="text-slate-500 text-sm">No batch jobs</p>
+          </div>
+          <div x-show="busyJ" class="flex justify-center py-16"><svg class="w-7 h-7 text-indigo-400 spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg></div>
+          <div x-show="!busyJ&&filteredJobs.length" class="overflow-x-auto">
+            <table class="w-full">
+              <thead><tr class="border-b border-slate-800 bg-[#020617]/60">
+                <th class="text-left text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3.5">Job ID</th>
+                <th class="text-left text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3.5">Key</th>
+                <th class="text-left text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3.5">Model</th>
+                <th class="text-left text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3.5">Status</th>
+                <th class="text-left text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3.5">Progress</th>
+                <th class="text-left text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3.5">Queue</th>
+                <th class="text-left text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3.5">Created</th>
+                <th class="text-left text-xs font-medium text-slate-500 uppercase tracking-wide px-5 py-3.5">Download</th>
+              </tr></thead>
+              <tbody class="divide-y divide-slate-800/50">
+                <template x-for="j in filteredJobs" :key="j.id">
+                  <tr class="hover:bg-slate-800/30 transition-colors">
+                    <td class="px-5 py-4"><code class="text-xs text-slate-400 font-mono" x-text="j.id.slice(0,8)+'…'"></code></td>
+                    <td class="px-5 py-4">
+                      <div class="flex flex-col gap-0.5">
+                        <span class="text-sm text-slate-200" x-text="j.key_name||'Unknown'"></span>
+                        <code class="text-xs text-slate-500 font-mono" x-text="j.key_prefix||'—'"></code>
+                      </div>
+                    </td>
+                    <td class="px-5 py-4"><code class="text-xs text-slate-400 bg-slate-800 px-2 py-0.5 rounded" x-text="j.model||'—'"></code></td>
+                    <td class="px-5 py-4">
+                      <div class="flex flex-col gap-1">
+                        <span :class="stateClass(j.state)" class="text-xs font-medium px-2.5 py-1 rounded-full capitalize w-fit" x-text="j.state"></span>
+                        <span x-show="j.error_msg" class="text-xs text-red-400 max-w-[160px] truncate" x-text="j.error_msg"></span>
+                      </div>
+                    </td>
+                    <td class="px-5 py-4">
+                      <div class="flex flex-col gap-1.5">
+                        <span class="text-xs text-slate-400" x-text="n(j.completed)+' / '+n(j.total)+(j.failed_count?' ('+n(j.failed_count)+' failed)':'')"></span>
+                        <div class="w-28 bg-slate-700 rounded-full h-1.5">
+                          <div class="h-1.5 rounded-full transition-all"
+                               :class="j.state==='failed'?'bg-red-500':j.state==='done'?'bg-emerald-500':'bg-indigo-500'"
+                               :style="'width:'+jpct(j)+'%'"></div>
+                        </div>
+                      </div>
+                    </td>
+                    <td class="px-5 py-4 text-xs text-slate-400" x-text="j.queue_position ? '#'+j.queue_position : '—'"></td>
+                    <td class="px-5 py-4 text-xs text-slate-500 whitespace-nowrap" x-text="ago(j.created_at)"></td>
+                    <td class="px-5 py-4">
+                      <a x-show="j.download_url" :href="j.download_url" target="_blank"
+                         class="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 transition-colors">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        ZIP
+                      </a>
+                      <span x-show="!j.download_url" class="text-xs text-slate-700">—</span>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══════════════════════════════════════ SYSTEM ════════════════════ -->
+      <div x-show="sec==='system'" class="space-y-5">
+        <div x-show="busySys&&!sys" class="flex justify-center py-16"><svg class="w-7 h-7 text-indigo-400 spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg></div>
+        <div x-show="sys" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <!-- API card -->
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
+            <div class="flex items-center gap-3 mb-5">
+              <div class="w-10 h-10 bg-slate-800 rounded-xl flex items-center justify-center">
+                <svg class="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+              </div>
+              <div>
+                <h3 class="text-sm font-semibold">API Server</h3>
+                <p class="text-xs text-slate-500" x-text="sys?.api?.url"></p>
+              </div>
+              <div class="ml-auto">
+                <span :class="badgeClass(sys?.api?.status)" class="text-xs font-medium px-2.5 py-1 rounded-full capitalize" x-text="sys?.api?.status||'—'"></span>
+              </div>
+            </div>
+            <div x-show="sys?.api?.response" class="bg-slate-800 rounded-lg p-3">
+              <pre class="text-xs text-slate-400 font-mono overflow-auto" x-text="JSON.stringify(sys?.api?.response,null,2)"></pre>
+            </div>
+            <div x-show="sys?.api?.error" class="text-xs text-red-400 mt-2" x-text="sys?.api?.error"></div>
+          </div>
+          <!-- DB card -->
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-6">
+            <div class="flex items-center gap-3 mb-5">
+              <div class="w-10 h-10 bg-slate-800 rounded-xl flex items-center justify-center">
+                <svg class="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+              </div>
+              <div>
+                <h3 class="text-sm font-semibold">PostgreSQL</h3>
+                <p class="text-xs text-slate-500">Database</p>
+              </div>
+              <div class="ml-auto">
+                <span :class="badgeClass(sys?.db?.status)" class="text-xs font-medium px-2.5 py-1 rounded-full capitalize" x-text="sys?.db?.status||'—'"></span>
+              </div>
+            </div>
+            <div x-show="sys?.db?.status==='connected'" class="space-y-2">
+              <div class="flex items-center justify-between text-sm">
+                <span class="text-slate-400">API Keys</span><span class="font-mono text-slate-200" x-text="n(sys?.db?.key_count)"></span>
+              </div>
+              <div class="flex items-center justify-between text-sm">
+                <span class="text-slate-400">Usage Logs</span><span class="font-mono text-slate-200" x-text="n(sys?.db?.log_count)"></span>
+              </div>
+              <div class="flex items-center justify-between text-sm">
+                <span class="text-slate-400">Batch Jobs</span><span class="font-mono text-slate-200" x-text="n(sys?.db?.job_count)"></span>
+              </div>
+              <div class="mt-3 pt-3 border-t border-slate-800">
+                <p class="text-xs text-slate-500 font-mono leading-relaxed" x-text="sys?.db?.version"></p>
+              </div>
+            </div>
+            <div x-show="sys?.db?.error" class="text-xs text-red-400 mt-2" x-text="sys?.db?.error"></div>
+          </div>
+        </div>
+        <!-- config -->
+        <div x-show="sys" class="bg-slate-900 border border-slate-800 rounded-xl p-6">
+          <h3 class="text-sm font-semibold mb-4">Configuration</h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div class="flex items-center justify-between py-2.5 px-4 bg-slate-800 rounded-lg">
+              <span class="text-sm text-slate-400">API Base URL</span>
+              <code class="text-xs text-indigo-400 font-mono" x-text="sys?.config?.api_base_url||'—'"></code>
+            </div>
+            <div class="flex items-center justify-between py-2.5 px-4 bg-slate-800 rounded-lg">
+              <span class="text-sm text-slate-400">Admin Secret</span>
+              <span :class="sys?.config?.admin_secret_configured?'text-emerald-400':'text-red-400'"
+                    class="text-xs font-medium" x-text="sys?.config?.admin_secret_configured?'✓ Configured':'✗ Missing'"></span>
+            </div>
+            <div class="flex items-center justify-between py-2.5 px-4 bg-slate-800 rounded-lg">
+              <span class="text-sm text-slate-400">Database</span>
+              <span :class="sys?.config?.db_configured?'text-emerald-400':'text-red-400'"
+                    class="text-xs font-medium" x-text="sys?.config?.db_configured?'✓ Configured':'✗ Missing'"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════ CREATE KEY MODAL ══ -->
+<div x-show="showCreate"
+     x-transition:enter="transition duration-150" x-transition:enter-start="opacity-0"
+     x-transition:leave="transition duration-100" x-transition:leave-end="opacity-0"
+     class="fixed inset-0 z-40 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+     @click.self="showCreate=false">
+  <div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md p-6 shadow-2xl fadein"
+       @click.stop>
+    <div class="flex items-center justify-between mb-6">
+      <h2 class="text-base font-semibold">Create API Key</h2>
+      <button @click="showCreate=false" class="text-slate-400 hover:text-slate-200 transition-colors">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-slate-300 mb-1.5">Key Name</label>
+        <input x-model="cName" type="text" placeholder="e.g. Production API"
+               class="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-300 mb-1.5">Monthly Quota</label>
+        <input x-model.number="cQuota" type="number" min="1"
+               class="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition">
+        <p class="text-xs text-slate-500 mt-1.5">Maximum requests per calendar month.</p>
+      </div>
+    </div>
+    <div class="flex gap-3 mt-6">
+      <button @click="showCreate=false"
+              class="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-sm transition-colors">Cancel</button>
+      <button @click="createKey()" :disabled="cBusy||!cName"
+              class="flex-1 py-2.5 bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl text-sm flex items-center justify-center gap-2 transition-colors">
+        <svg x-show="cBusy" class="w-4 h-4 spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+        <span x-text="cBusy?'Creating…':'Create Key'"></span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ NEW KEY REVEAL MODAL ══ -->
+<div x-show="showNewKey"
+     x-transition:enter="transition duration-150" x-transition:enter-start="opacity-0"
+     class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+  <div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg p-6 shadow-2xl fadein">
+    <div class="flex items-center gap-3 mb-5">
+      <div class="w-10 h-10 bg-emerald-500/15 rounded-xl flex items-center justify-center">
+        <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+      <div>
+        <h2 class="text-base font-semibold">Key Created!</h2>
+        <p class="text-xs text-slate-400">Copy it now — it will not be shown again.</p>
+      </div>
+    </div>
+    <div class="bg-slate-800 border border-slate-700 rounded-xl p-4 mb-2 flex items-center gap-3">
+      <code class="flex-1 text-sm font-mono text-emerald-400 break-all" x-text="newKey?.key||'—'"></code>
+      <button @click="copyKey()"
+              class="shrink-0 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5">
+        <svg x-show="!keyCopied" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        <svg x-show="keyCopied" class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+        <span x-text="keyCopied?'Copied!':'Copy'"></span>
+      </button>
+    </div>
+    <div class="grid grid-cols-2 gap-3 mt-4 text-sm">
+      <div class="bg-slate-800 rounded-lg px-3 py-2">
+        <p class="text-xs text-slate-500 mb-0.5">Name</p>
+        <p class="font-medium truncate" x-text="newKey?.name||'—'"></p>
+      </div>
+      <div class="bg-slate-800 rounded-lg px-3 py-2">
+        <p class="text-xs text-slate-500 mb-0.5">Monthly Quota</p>
+        <p class="font-mono font-medium" x-text="n(newKey?.monthly_quota)"></p>
+      </div>
+    </div>
+    <button @click="showNewKey=false;newKey=null"
+            class="mt-5 w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-sm font-medium transition-colors">Done</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ REVOKE CONFIRM MODAL ══ -->
+<div x-show="showRevoke"
+     x-transition:enter="transition duration-150" x-transition:enter-start="opacity-0"
+     class="fixed inset-0 z-40 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+     @click.self="showRevoke=false">
+  <div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-sm p-6 shadow-2xl fadein" @click.stop>
+    <div class="flex items-center gap-3 mb-4">
+      <div class="w-10 h-10 bg-red-500/15 rounded-xl flex items-center justify-center">
+        <svg class="w-5 h-5 text-red-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      </div>
+      <div>
+        <h2 class="text-base font-semibold">Revoke Key</h2>
+        <p class="text-xs text-slate-400">This action cannot be undone.</p>
+      </div>
+    </div>
+    <p class="text-sm text-slate-300 mb-5">
+      Are you sure you want to revoke <span class="font-semibold text-white" x-text="revokeTarget?.name"></span>?
+      All requests using this key will immediately fail.
+    </p>
+    <div class="flex gap-3">
+      <button @click="showRevoke=false" class="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-sm transition-colors">Cancel</button>
+      <button @click="doRevoke()" :disabled="rBusy"
+              class="flex-1 py-2.5 bg-red-500 hover:bg-red-400 disabled:opacity-50 text-white font-semibold rounded-xl text-sm flex items-center justify-center gap-2 transition-colors">
+        <svg x-show="rBusy" class="w-4 h-4 spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+        <span x-text="rBusy?'Revoking…':'Revoke Key'"></span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════ TOASTS ════ -->
+<div class="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+  <template x-for="t in toasts" :key="t.id">
+    <div class="flex items-center gap-3 px-4 py-3 rounded-xl border shadow-xl pointer-events-auto fadein"
+         :class="{
+           'bg-emerald-950 border-emerald-700/50 text-emerald-200': t.type==='success',
+           'bg-red-950 border-red-700/50 text-red-200':             t.type==='error',
+           'bg-slate-900 border-slate-700 text-slate-200':          t.type==='info'
+         }">
+      <span class="text-sm" x-text="t.msg"></span>
+      <button @click="rmToast(t.id)" class="text-current opacity-50 hover:opacity-100 ml-1">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+  </template>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════ SCRIPT ════ -->
+<script>
+function app() {
+  return {
+    // ── auth ──────────────────────────────────────────────────────────────
+    authed:      false,
+    token:       '',
+    loginSecret: '',
+    loginBusy:   false,
+    loginErr:    '',
+
+    // ── nav ───────────────────────────────────────────────────────────────
+    sec: 'dashboard',
+    pageTitle: { dashboard:'Dashboard', keys:'API Keys', analytics:'Analytics', jobs:'Batch Jobs', system:'System Health' },
+    pageDesc:  { dashboard:'Overview and recent activity', keys:'Manage API access credentials', analytics:'Usage metrics and trends', jobs:'Batch generation queue', system:'Infrastructure status' },
+    navItems: [
+      { id:'dashboard', label:'Dashboard', icon:'<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>',
+        badge: () => 0 },
+      { id:'keys',      label:'API Keys',  icon:'<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>',
+        badge: () => this.keys.filter(k=>k.is_active).length },
+      { id:'analytics', label:'Analytics', icon:'<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>',
+        badge: () => 0 },
+      { id:'jobs',      label:'Batch Jobs',icon:'<svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>',
+        badge: () => this.dash?.active_jobs ?? 0 },
+    ],
+
+    // ── data ──────────────────────────────────────────────────────────────
+    dash:    null,
+    keys:    [],
+    metrics: null,
+    jobs:    [],
+    sys:     null,
+
+    // ── loading flags ─────────────────────────────────────────────────────
+    busy:    false,
+    busyKeys:false,
+    busyM:   false,
+    busyJ:   false,
+    busySys: false,
+
+    // ── modals ────────────────────────────────────────────────────────────
+    showCreate:  false,
+    cName:       '',
+    cQuota:      1000,
+    cBusy:       false,
+    showNewKey:  false,
+    newKey:      null,
+    keyCopied:   false,
+    showRevoke:  false,
+    revokeTarget:null,
+    rBusy:       false,
+
+    // ── filters ───────────────────────────────────────────────────────────
+    keyQ:  '',
+    jobF:  'all',
+    mDays: 30,
+
+    // ── auto-refresh ──────────────────────────────────────────────────────
+    autoOn:    false,
+    autoTimer: null,
+
+    // ── charts ────────────────────────────────────────────────────────────
+    cDailyInst:  null,
+    cHourlyInst: null,
+
+    // ── toasts ────────────────────────────────────────────────────────────
+    toasts: [],
+    toastSeq: 0,
+
+    // ── lifecycle ─────────────────────────────────────────────────────────
+    async init() {
+      this.token = localStorage.getItem('ag_tok') || '';
+      if (this.token) {
+        const r = await fetch('/auth/status', { headers: this.hdr() });
+        const d = await r.json();
+        if (d.ok) { this.authed = true; await this.loadDash(); return; }
+        this.token = ''; localStorage.removeItem('ag_tok');
+      }
+    },
+
+    // ── auth ──────────────────────────────────────────────────────────────
+    async login() {
+      this.loginBusy = true; this.loginErr = '';
+      try {
+        const r = await fetch('/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({secret:this.loginSecret}) });
+        const d = await r.json();
+        if (r.ok) {
+          this.token = d.token;
+          localStorage.setItem('ag_tok', d.token);
+          this.authed = true; this.loginSecret = '';
+          await this.loadDash();
+        } else { this.loginErr = d.error || 'Authentication failed'; }
+      } catch { this.loginErr = 'Network error – is the server running?'; }
+      finally  { this.loginBusy = false; }
+    },
+    async logout() {
+      await fetch('/auth/logout', { method:'POST', headers:{'Content-Type':'application/json','X-Admin-Token':this.token}, body:JSON.stringify({token:this.token}) });
+      this.token = ''; localStorage.removeItem('ag_tok');
+      this.authed = false; this.dash = null; this.keys = []; this.metrics = null; this.jobs = []; this.sys = null;
+      clearInterval(this.autoTimer);
+    },
+    hdr() { return {'X-Admin-Token': this.token}; },
+    async api(path) {
+      const r = await fetch(path, {headers: this.hdr()});
+      if (r.status===401) { this.authed=false; this.token=''; localStorage.removeItem('ag_tok'); return null; }
+      return r.ok ? r.json() : null;
+    },
+
+    // ── navigation ────────────────────────────────────────────────────────
+    async navigate(s) {
+      this.sec = s;
+      if (s==='dashboard')  await this.loadDash();
+      if (s==='keys')       await this.loadKeys();
+      if (s==='analytics')  await this.loadMetrics();
+      if (s==='jobs')       await this.loadJobs();
+      if (s==='system')     await this.loadSys();
+    },
+
+    // ── loaders ───────────────────────────────────────────────────────────
+    async loadDash() {
+      this.busy = true;
+      const d = await this.api('/api/dashboard');
+      if (d) this.dash = d;
+      this.busy = false;
+    },
+    async loadKeys() {
+      this.busyKeys = true;
+      const d = await this.api('/api/keys');
+      if (d) this.keys = d.keys || [];
+      this.busyKeys = false;
+    },
+    async loadMetrics() {
+      this.busyM = true;
+      const d = await this.api(`/api/metrics?days=${this.mDays}`);
+      if (d) { this.metrics = d; await this.$nextTick(); this.drawCharts(); }
+      this.busyM = false;
+    },
+    async loadJobs() {
+      this.busyJ = true;
+      const d = await this.api('/api/jobs');
+      if (d) this.jobs = d.jobs || [];
+      this.busyJ = false;
+    },
+    async loadSys() {
+      this.busySys = true;
+      const d = await this.api('/api/system');
+      if (d) this.sys = d;
+      this.busySys = false;
+    },
+
+    // ── key actions ───────────────────────────────────────────────────────
+    async createKey() {
+      this.cBusy = true;
+      try {
+        const r = await fetch('/api/keys', { method:'POST', headers:{...this.hdr(),'Content-Type':'application/json'}, body:JSON.stringify({name:this.cName, monthly_quota:this.cQuota}) });
+        const d = await r.json();
+        if (r.ok) {
+          this.showCreate=false; this.newKey=d; this.showNewKey=true;
+          this.cName=''; this.cQuota=1000;
+          await this.loadKeys();
+          this.toast('Key created successfully','success');
+        } else { this.toast(d.error||'Failed to create key','error'); }
+      } catch { this.toast('Network error','error'); }
+      finally  { this.cBusy=false; }
+    },
+    copyKey() {
+      navigator.clipboard.writeText(this.newKey?.key||'');
+      this.keyCopied=true; setTimeout(()=>{this.keyCopied=false;},2000);
+    },
+    askRevoke(k)  { this.revokeTarget=k; this.showRevoke=true; },
+    async doRevoke() {
+      if (!this.revokeTarget) return;
+      this.rBusy=true;
+      try {
+        const r = await fetch(`/api/keys/${this.revokeTarget.id}`, {method:'DELETE', headers:this.hdr()});
+        const d = await r.json();
+        if (r.ok) { this.showRevoke=false; this.revokeTarget=null; await this.loadKeys(); this.toast('Key revoked','success'); }
+        else { this.toast(d.error||'Failed to revoke key','error'); }
+      } catch { this.toast('Network error','error'); }
+      finally  { this.rBusy=false; }
+    },
+
+    // ── auto-refresh ──────────────────────────────────────────────────────
+    toggleAuto() {
+      this.autoOn = !this.autoOn;
+      if (this.autoOn) {
+        this.autoTimer = setInterval(()=>{ if(this.sec==='jobs') this.loadJobs(); else if(this.sec==='dashboard') this.loadDash(); }, 5000);
+        this.toast('Auto-refresh on (5s)','info');
+      } else { clearInterval(this.autoTimer); this.toast('Auto-refresh off','info'); }
+    },
+
+    // ── charts ────────────────────────────────────────────────────────────
+    drawCharts() {
+      if (this.cDailyInst)  { this.cDailyInst.destroy();  this.cDailyInst  = null; }
+      if (this.cHourlyInst) { this.cHourlyInst.destroy(); this.cHourlyInst = null; }
+      const daily  = this.metrics?.daily  || [];
+      const hourly = this.metrics?.hourly || [];
+      const dCtx   = document.getElementById('cDaily');
+      const hCtx   = document.getElementById('cHourly');
+      const grid   = '#1e293b';
+      const tick   = '#64748b';
+      if (dCtx) {
+        this.cDailyInst = new Chart(dCtx, {
+          type: 'line',
+          data: { labels: daily.map(r=>r.d), datasets: [{ label:'Requests', data:daily.map(r=>r.n), borderColor:'#6366f1', backgroundColor:'rgba(99,102,241,0.1)', fill:true, tension:.4, pointRadius:3, pointHoverRadius:5 }] },
+          options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ x:{ticks:{color:tick,maxTicksLimit:8},grid:{color:grid}}, y:{ticks:{color:tick},grid:{color:grid},beginAtZero:true} } }
+        });
+      }
+      if (hCtx) {
+        const hMap = {}; hourly.forEach(r=>{ hMap[r.h]=r.n; });
+        const allH = Array.from({length:24},(_,i)=>i);
+        this.cHourlyInst = new Chart(hCtx, {
+          type: 'bar',
+          data: { labels:allH.map(h=>`${h}:00`), datasets:[{ label:'Requests', data:allH.map(h=>hMap[h]||0), backgroundColor:'rgba(99,102,241,.7)', borderColor:'#6366f1', borderWidth:0, borderRadius:3 }] },
+          options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ x:{ticks:{color:tick,maxTicksLimit:12},grid:{display:false}}, y:{ticks:{color:tick},grid:{color:grid},beginAtZero:true} } }
+        });
+      }
+    },
+
+    // ── toasts ────────────────────────────────────────────────────────────
+    toast(msg, type='info') {
+      const id = ++this.toastSeq;
+      this.toasts.push({id, msg, type});
+      setTimeout(()=>this.rmToast(id), 4000);
+    },
+    rmToast(id) { this.toasts = this.toasts.filter(t=>t.id!==id); },
+
+    // ── computed ──────────────────────────────────────────────────────────
+    get filteredKeys() {
+      if (!this.keyQ) return this.keys;
+      const q = this.keyQ.toLowerCase();
+      return this.keys.filter(k => (k.name||'').toLowerCase().includes(q)||(k.key_prefix||'').toLowerCase().includes(q));
+    },
+    get filteredJobs() {
+      return this.jobF==='all' ? this.jobs : this.jobs.filter(j=>j.state===this.jobF);
+    },
+
+    // ── helpers ───────────────────────────────────────────────────────────
+    n(v)    { return (v===null||v===undefined)?'0':Number(v).toLocaleString(); },
+    fmtDate(iso) {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' '+d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+    },
+    ago(iso) {
+      if (!iso) return '—';
+      const s = Math.floor((Date.now()-new Date(iso).getTime())/1000);
+      if (s<60)  return s+'s ago';
+      if (s<3600) return Math.floor(s/60)+'m ago';
+      if (s<86400) return Math.floor(s/3600)+'h ago';
+      return Math.floor(s/86400)+'d ago';
+    },
+    qpct(k)  { return k.monthly_quota>0 ? Math.round(k.monthly_used/k.monthly_quota*100) : 0; },
+    jpct(j)  { return j.total>0 ? Math.round(j.completed/j.total*100) : 0; },
+    stateClass(s) {
+      return { done:'bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20', running:'bg-indigo-500/10 text-indigo-400 ring-1 ring-indigo-500/20', uploading:'bg-blue-500/10 text-blue-400 ring-1 ring-blue-500/20', queued:'bg-slate-500/10 text-slate-400 ring-1 ring-slate-500/20', failed:'bg-red-500/10 text-red-400 ring-1 ring-red-500/20' }[s] || 'bg-slate-500/10 text-slate-400';
+    },
+    badgeClass(s) {
+      return { online:'bg-emerald-500/10 text-emerald-400', degraded:'bg-amber-500/10 text-amber-400', offline:'bg-red-500/10 text-red-400', connected:'bg-emerald-500/10 text-emerald-400', disconnected:'bg-red-500/10 text-red-400', error:'bg-red-500/10 text-red-400' }[s] || 'bg-slate-500/10 text-slate-400';
+    },
+    dotClass(s) {
+      return { online:'bg-emerald-400', degraded:'bg-amber-400', offline:'bg-red-400' }[s] || 'bg-slate-500';
+    },
+  }
+}
+</script>
+</body>
+</html>
