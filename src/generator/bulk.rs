@@ -9,7 +9,7 @@ use base64::Engine;
 use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use tokio::time::{sleep, Duration, Instant};
+use tokio::{sync::Semaphore, time::{sleep, Duration, Instant}};
 use uuid::Uuid;
 
 use crate::db;
@@ -127,11 +127,13 @@ impl From<crate::db::BatchJobRow> for BatchJobStatus {
 // ── Pipeline ──────────────────────────────────────────────────────────────────
 
 pub struct BulkPipeline {
-    client:       Client,
-    pool:         PgPool,
-    save_dir:     PathBuf,
-    hf_token:     Option<String>,
-    hf_bucket_id: String,
+    client:        Client,
+    pool:          PgPool,
+    save_dir:      PathBuf,
+    hf_token:      Option<String>,
+    hf_bucket_id:  String,
+    /// Ensures only one batch job runs at a time; others wait in "queued" state.
+    job_semaphore: Arc<Semaphore>,
 }
 
 impl BulkPipeline {
@@ -156,7 +158,7 @@ impl BulkPipeline {
         let hf_bucket_id = std::env::var("HF_BUCKET_ID")
             .unwrap_or_else(|_| "jamg/avagen-batches".into());
 
-        Ok(Self { client, pool, save_dir, hf_token, hf_bucket_id })
+        Ok(Self { client, pool, save_dir, hf_token, hf_bucket_id, job_semaphore: Arc::new(Semaphore::new(1)) })
     }
 
     /// Submit a batch job — returns immediately; generation + upload run in background.
@@ -181,9 +183,10 @@ impl BulkPipeline {
         let pool         = self.pool.clone();
         let hf_token     = self.hf_token.clone();
         let hf_bucket_id = self.hf_bucket_id.clone();
+        let semaphore    = self.job_semaphore.clone();
 
         tokio::spawn(async move {
-            run_job(client, pool, job_id, req, save_path, hf_token, hf_bucket_id).await;
+            run_job(client, pool, job_id, req, save_path, hf_token, hf_bucket_id, semaphore).await;
         });
 
         Ok(status)
@@ -214,7 +217,17 @@ async fn run_job(
     save_path:    PathBuf,
     hf_token:     Option<String>,
     hf_bucket_id: String,
+    semaphore:    Arc<Semaphore>,
 ) {
+    // Wait until no other job is running; job stays "queued" until permit acquired.
+    let _permit = match semaphore.acquire().await {
+        Ok(p) => p,
+        Err(_) => {
+            let _ = db::fail_batch_job(&pool, job_id, "semaphore closed").await;
+            return;
+        }
+    };
+
     if let Err(e) = tokio::fs::create_dir_all(&save_path).await {
         tracing::error!(?job_id, "Failed to create save dir: {e}");
         let _ = db::fail_batch_job(&pool, job_id, &e.to_string()).await;
