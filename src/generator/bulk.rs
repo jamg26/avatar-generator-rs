@@ -267,7 +267,7 @@ impl BulkPipeline {
         let pending = db::list_pending_jobs(&self.pool).await
             .map_err(|e| anyhow!("DB error listing pending jobs: {e}"))?;
 
-        let count = pending.len();
+        let mut spawned = 0usize;
         for row in pending {
             let req: BulkRequest = match row.request_json.as_ref()
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -290,10 +290,11 @@ impl BulkPipeline {
             tokio::spawn(async move {
                 run_job(client, pool, row.id, req, save_path, hf_token, hf_bucket_id, semaphore).await;
             });
+            spawned += 1;
         }
 
-        if count > 0 {
-            tracing::info!("Recovery: re-queued {count} pending job(s)");
+        if spawned > 0 {
+            tracing::info!("Recovery: re-queued {spawned} pending job(s)");
         } else {
             tracing::info!("Recovery: no pending jobs found");
         }
