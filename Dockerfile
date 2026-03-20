@@ -1,5 +1,7 @@
 # ── Stage 1: Build the Rust binary ─────────────────────────────────────────
-FROM rust:1-slim AS builder
+# Pinned to bookworm so the binary links against glibc 2.36, matching the
+# runtime image. rust:1-slim recently moved to Ubuntu 24.04 (glibc 2.39).
+FROM rust:1-slim-bookworm AS builder
 WORKDIR /build
 
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && \
