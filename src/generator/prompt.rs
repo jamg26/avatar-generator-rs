@@ -594,6 +594,8 @@ mod tests {
             style: ArtStyle::Photorealistic,
             format: ImageFormat::Png,
             size: None,
+            width: None,
+            height: None,
             seed: None,
             shot_type: ShotType::Headshot,
         };
