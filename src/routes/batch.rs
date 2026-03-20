@@ -34,9 +34,18 @@ pub async fn submit(
         "Submitting bulk job"
     );
 
+    // Pre-check: ensure the key has enough quota for the entire batch.
+    let used = db::monthly_usage_count(&state.pool, &key.id).await?;
+    let remaining = key.monthly_quota - used;
+    if req.count as i64 > remaining {
+        return Err(AppError::QuotaExceeded);
+    }
+
+    let image_count = req.count as i64;
     let status = state.bulk_pipeline.submit(req).await?;
 
-    db::record_usage(&state.pool, &key.id, "/api/v1/batch/generate").await?;
+    // Charge all images up-front so the quota is immediately reflected.
+    db::record_usage(&state.pool, &key.id, "/api/v1/batch/generate", image_count).await?;
 
     Ok((StatusCode::ACCEPTED, Json(status)))
 }

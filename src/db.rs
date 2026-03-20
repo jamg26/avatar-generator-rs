@@ -29,11 +29,18 @@ pub async fn init_pool(database_url: &str) -> PgPool {
             id          BIGSERIAL PRIMARY KEY,
             api_key_id  TEXT NOT NULL REFERENCES api_keys(id),
             endpoint    TEXT NOT NULL,
+            count       BIGINT NOT NULL DEFAULT 1,
             created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )"
     )
         .execute(&pool).await
         .expect("Failed to create usage_log table");
+
+    // Idempotent migration: add count column to existing tables
+    let _ = sqlx::query(
+        "ALTER TABLE usage_log ADD COLUMN IF NOT EXISTS count BIGINT NOT NULL DEFAULT 1"
+    )
+        .execute(&pool).await;
 
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_usage_key_date
@@ -129,21 +136,23 @@ pub async fn list_api_keys(pool: &PgPool) -> Result<Vec<ApiKeyRow>, sqlx::Error>
 pub async fn record_usage(
     pool: &PgPool,
     api_key_id: &str,
-    endpoint: &str
+    endpoint: &str,
+    count: i64,
 ) -> Result<(), sqlx::Error> {
     sqlx
-        ::query("INSERT INTO usage_log (api_key_id, endpoint) VALUES ($1, $2)")
+        ::query("INSERT INTO usage_log (api_key_id, endpoint, count) VALUES ($1, $2, $3)")
         .bind(api_key_id)
         .bind(endpoint)
+        .bind(count)
         .execute(pool).await?;
     Ok(())
 }
 
-/// Returns the number of requests made by this key in the current calendar month.
+/// Returns the total number of images charged to this key in the current calendar month.
 pub async fn monthly_usage_count(pool: &PgPool, api_key_id: &str) -> Result<i64, sqlx::Error> {
     let row: (i64,) = sqlx
         ::query_as(
-            "SELECT COUNT(*) FROM usage_log
+            "SELECT COALESCE(SUM(count), 0) FROM usage_log
          WHERE api_key_id = $1
            AND created_at >= DATE_TRUNC('month', NOW())"
         )

@@ -156,7 +156,7 @@ pub async fn generate(
         .generate(face_b64, img_url, motion_bucket_id, noise_aug, fps_id, seed).await
         .map_err(|e| AppError::Internal(format!("video generation failed: {e}")))?;
 
-    db::record_usage(&state.pool, &key.id, "/api/v1/video/generate").await?;
+    db::record_usage(&state.pool, &key.id, "/api/v1/video/generate", 1).await?;
 
     Ok(
         (

@@ -57,7 +57,7 @@ pub async fn generate(
 
     let (bytes, content_type) = encode_image(&img, format)?;
 
-    db::record_usage(&state.pool, &key.id, "/api/v1/avatar/generate").await?;
+    db::record_usage(&state.pool, &key.id, "/api/v1/avatar/generate", 1).await?;
 
     Ok(([(header::CONTENT_TYPE, content_type)], bytes).into_response())
 }
