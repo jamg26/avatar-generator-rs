@@ -48,7 +48,7 @@ async fn main() {
     // ── Video pipeline ───────────────────────────────────────────────────────
     let skip_video = std::env
         ::var("SKIP_VIDEO_PIPELINE")
-        .map(|v| (v == "1" || v == "true"))
+        .map(|v| v == "1" || v == "true")
         .unwrap_or(false);
     let video_pipeline: Option<VideoPipeline> = if skip_video {
         tracing::warn!("SKIP_VIDEO_PIPELINE set — video generation disabled");

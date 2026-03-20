@@ -536,9 +536,6 @@ impl AvatarRequest {
             (ArtStyle::Photorealistic, ShotType::Landscape) =>
                 "photorealistic, hyperrealistic, 8k uhd, ultra-detailed, sharp focus, \
                  natural lighting, real person, environmental portrait, wide angle",
-            (ArtStyle::Photorealistic, _) =>
-                "photorealistic, hyperrealistic, 8k uhd, ultra-detailed, sharp focus, \
-                 professional studio lighting, real person",
             (ArtStyle::DigitalArt, _) => "trending on artstation, highly detailed, smooth",
             (ArtStyle::Anime, _) => "detailed anime style, clean lines, vibrant colors",
             (ArtStyle::Cartoon, _) => "clean vector style, bold outlines, vibrant",
