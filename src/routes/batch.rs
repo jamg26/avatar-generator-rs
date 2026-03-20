@@ -42,7 +42,7 @@ pub async fn submit(
     }
 
     let image_count = req.count as i64;
-    let status = state.bulk_pipeline.submit(req).await?;
+    let status = state.bulk_pipeline.submit(req, key.id.clone()).await?;
 
     // Charge all images up-front so the quota is immediately reflected.
     db::record_usage(&state.pool, &key.id, "/api/v1/batch/generate", image_count).await?;
@@ -55,12 +55,12 @@ pub async fn submit(
 /// Returns the current status of a bulk job.
 pub async fn get_job(
     State(state): State<AppState>,
-    Extension(_key): Extension<db::ApiKeyRow>,
+    Extension(key): Extension<db::ApiKeyRow>,
     Path(job_id): Path<Uuid>,
 ) -> Result<Json<BatchJobStatus>, AppError> {
     state
         .bulk_pipeline
-        .get_status(job_id)
+        .get_status(job_id, &key.id)
         .await?
         .map(Json)
         .ok_or_else(|| AppError::NotFound(format!("job {job_id} not found")))
@@ -68,10 +68,10 @@ pub async fn get_job(
 
 /// GET /api/v1/batch
 ///
-/// Returns all bulk jobs (in-memory, not persisted across restarts).
+/// Returns all bulk jobs for the authenticated API key.
 pub async fn list_jobs(
     State(state): State<AppState>,
-    Extension(_key): Extension<db::ApiKeyRow>,
+    Extension(key): Extension<db::ApiKeyRow>,
 ) -> Result<Json<Vec<BatchJobStatus>>, AppError> {
-    Ok(Json(state.bulk_pipeline.list_all().await?))
+    Ok(Json(state.bulk_pipeline.list_all(&key.id).await?))
 }

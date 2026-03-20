@@ -66,6 +66,11 @@ pub async fn init_pool(database_url: &str) -> PgPool {
         .execute(&pool).await
         .expect("Failed to create batch_jobs table");
 
+    // Idempotent migration: add api_key_id to existing batch_jobs rows
+    let _ = sqlx::query(
+        "ALTER TABLE batch_jobs ADD COLUMN IF NOT EXISTS api_key_id TEXT NOT NULL DEFAULT ''"
+    ).execute(&pool).await;
+
     pool
 }
 
@@ -197,23 +202,26 @@ pub struct BatchJobRow {
     pub model:        String,
     pub download_url: Option<String>,
     pub error_msg:    Option<String>,
+    pub api_key_id:   String,
     pub created_at:   DateTime<Utc>,
     pub updated_at:   DateTime<Utc>,
 }
 
 pub async fn create_batch_job(
-    pool: &PgPool,
-    id:    uuid::Uuid,
-    total: i64,
-    model: &str,
+    pool:       &PgPool,
+    id:         uuid::Uuid,
+    total:      i64,
+    model:      &str,
+    api_key_id: &str,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO batch_jobs (id, total, model, state)
-         VALUES ($1, $2, $3, 'queued')"
+        "INSERT INTO batch_jobs (id, total, model, state, api_key_id)
+         VALUES ($1, $2, $3, 'queued', $4)"
     )
     .bind(id)
     .bind(total)
     .bind(model)
+    .bind(api_key_id)
     .execute(pool).await?;
     Ok(())
 }
@@ -283,17 +291,25 @@ pub async fn fail_batch_job(
 }
 
 pub async fn get_batch_job(
-    pool: &PgPool,
-    id:   uuid::Uuid,
+    pool:       &PgPool,
+    id:         uuid::Uuid,
+    api_key_id: &str,
 ) -> Result<Option<BatchJobRow>, sqlx::Error> {
-    sqlx::query_as::<_, BatchJobRow>("SELECT * FROM batch_jobs WHERE id = $1")
-        .bind(id)
-        .fetch_optional(pool).await
+    sqlx::query_as::<_, BatchJobRow>(
+        "SELECT * FROM batch_jobs WHERE id = $1 AND api_key_id = $2"
+    )
+    .bind(id)
+    .bind(api_key_id)
+    .fetch_optional(pool).await
 }
 
-pub async fn list_batch_jobs(pool: &PgPool) -> Result<Vec<BatchJobRow>, sqlx::Error> {
+pub async fn list_batch_jobs(
+    pool:       &PgPool,
+    api_key_id: &str,
+) -> Result<Vec<BatchJobRow>, sqlx::Error> {
     sqlx::query_as::<_, BatchJobRow>(
-        "SELECT * FROM batch_jobs ORDER BY created_at DESC"
+        "SELECT * FROM batch_jobs WHERE api_key_id = $1 ORDER BY created_at DESC"
     )
+    .bind(api_key_id)
     .fetch_all(pool).await
 }

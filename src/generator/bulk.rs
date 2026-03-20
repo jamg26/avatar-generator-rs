@@ -160,11 +160,11 @@ impl BulkPipeline {
     }
 
     /// Submit a batch job — returns immediately; generation + upload run in background.
-    pub async fn submit(&self, req: BulkRequest) -> Result<BatchJobStatus> {
+    pub async fn submit(&self, req: BulkRequest, api_key_id: String) -> Result<BatchJobStatus> {
         let job_id    = Uuid::new_v4();
         let save_path = self.save_dir.join(job_id.to_string());
 
-        db::create_batch_job(&self.pool, job_id, req.count as i64, req.model.db_name())
+        db::create_batch_job(&self.pool, job_id, req.count as i64, req.model.db_name(), &api_key_id)
             .await
             .map_err(|e| anyhow!("DB error inserting batch job: {e}"))?;
 
@@ -189,15 +189,15 @@ impl BulkPipeline {
         Ok(status)
     }
 
-    pub async fn get_status(&self, job_id: Uuid) -> Result<Option<BatchJobStatus>> {
-        db::get_batch_job(&self.pool, job_id)
+    pub async fn get_status(&self, job_id: Uuid, api_key_id: &str) -> Result<Option<BatchJobStatus>> {
+        db::get_batch_job(&self.pool, job_id, api_key_id)
             .await
             .map(|opt| opt.map(BatchJobStatus::from))
             .map_err(|e| anyhow!("DB error: {e}"))
     }
 
-    pub async fn list_all(&self) -> Result<Vec<BatchJobStatus>> {
-        db::list_batch_jobs(&self.pool)
+    pub async fn list_all(&self, api_key_id: &str) -> Result<Vec<BatchJobStatus>> {
+        db::list_batch_jobs(&self.pool, api_key_id)
             .await
             .map(|rows| rows.into_iter().map(BatchJobStatus::from).collect())
             .map_err(|e| anyhow!("DB error: {e}"))
@@ -383,7 +383,7 @@ try:
 except Exception as e:
     print(f"Warning: create_bucket: {e}", file=sys.stderr)
 batch_bucket_files(bucket_id, add=[(zip_path, filename)])
-print(f"https://huggingface.co/buckets/{bucket_id}/{filename}")
+print(f"https://huggingface.co/buckets/{bucket_id}/tree/{filename}?download=true")
 "#;
 
     let output = tokio::process::Command::new("/opt/hfvenv/bin/python3")
