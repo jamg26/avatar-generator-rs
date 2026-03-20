@@ -308,16 +308,26 @@ async fn run_job(
     let mut completed:    i64   = 0;
     let mut failed_count: i64   = 0;
     let mut last_db             = Instant::now();
+    let mut cancelled           = false;
 
     while let Some(ok) = prog_rx.recv().await {
         if ok { completed += 1; } else { failed_count += 1; }
         if last_db.elapsed() >= Duration::from_secs(2) {
             let _ = db::update_batch_job_progress(&pool, job_id, completed, failed_count).await;
+            if db::get_job_state(&pool, job_id).await.unwrap_or(None).as_deref() == Some("cancelled") {
+                tracing::info!(?job_id, "Job cancelled by admin — stopping generation");
+                cancelled = true;
+                break;
+            }
             last_db = Instant::now();
         }
     }
 
     let _ = db::update_batch_job_progress(&pool, job_id, completed, failed_count).await;
+
+    if cancelled {
+        return;
+    }
 
     tracing::info!(?job_id, completed, failed_count, "Generation complete — zipping and uploading");
     let _ = db::update_batch_job_state(&pool, job_id, "uploading").await;

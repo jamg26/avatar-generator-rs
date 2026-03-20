@@ -277,6 +277,38 @@ pub async fn complete_batch_job(
     Ok(())
 }
 
+pub async fn cancel_batch_job(pool: &PgPool, id: uuid::Uuid) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query(
+        "UPDATE batch_jobs SET state='cancelled', updated_at=NOW()
+         WHERE id=$1 AND state IN ('queued','running','uploading')"
+    ).bind(id).execute(pool).await?;
+    Ok(r.rows_affected() > 0)
+}
+
+pub async fn delete_batch_job(pool: &PgPool, id: uuid::Uuid) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query("DELETE FROM batch_jobs WHERE id=$1")
+        .bind(id).execute(pool).await?;
+    Ok(r.rows_affected() > 0)
+}
+
+pub async fn get_job_state(pool: &PgPool, id: uuid::Uuid) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar::<_, String>("SELECT state FROM batch_jobs WHERE id=$1")
+        .bind(id).fetch_optional(pool).await
+}
+
+pub async fn delete_api_key(pool: &PgPool, id: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query("DELETE FROM usage_log WHERE api_key_id=$1").bind(id).execute(pool).await?;
+    let r = sqlx::query("DELETE FROM api_keys WHERE id=$1").bind(id).execute(pool).await?;
+    Ok(r.rows_affected() > 0)
+}
+
+pub async fn update_api_key_quota(pool: &PgPool, id: &str, quota: i64) -> Result<bool, sqlx::Error> {
+    let r = sqlx::query(
+        "UPDATE api_keys SET monthly_quota=$2, updated_at=NOW() WHERE id=$1"
+    ).bind(id).bind(quota).execute(pool).await?;
+    Ok(r.rows_affected() > 0)
+}
+
 pub async fn fail_batch_job(
     pool:  &PgPool,
     id:    uuid::Uuid,
