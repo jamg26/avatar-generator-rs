@@ -1,3 +1,4 @@
+pub mod admin_api;
 pub mod avatar;
 pub mod batch;
 pub mod health;
@@ -69,9 +70,16 @@ pub fn create_router(
 
     // Admin routes (protected by admin secret in the handler)
     let admin = Router::new()
-        .route("/api/admin/keys", post(keys::create_key))
-        .route("/api/admin/keys", get(keys::list_keys))
-        .route("/api/admin/keys/{id}", delete(keys::revoke_key));
+        .route("/admin",                          get(admin_api::serve_admin))
+        .route("/api/admin/dashboard",            get(admin_api::dashboard))
+        .route("/api/admin/metrics",              get(admin_api::metrics))
+        .route("/api/admin/system",               get(admin_api::system_info))
+        .route("/api/admin/jobs",                 get(admin_api::list_jobs))
+        .route("/api/admin/jobs/{id}/cancel",     post(admin_api::cancel_job))
+        .route("/api/admin/jobs/{id}",            delete(admin_api::delete_job))
+        .route("/api/admin/keys",                 get(admin_api::list_keys_with_usage).post(keys::create_key))
+        .route("/api/admin/keys/{id}",            delete(keys::revoke_key).patch(admin_api::update_key))
+        .route("/api/admin/keys/{id}/hard",       delete(admin_api::hard_delete_key));
 
     // Public routes
     let public = Router::new().route("/", get(health::home)).route("/health", get(health::handle));
