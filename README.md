@@ -1,3 +1,12 @@
+---
+title: AvaGen
+emoji: 🧑‍🎨
+colorFrom: purple
+colorTo: blue
+sdk: docker
+pinned: false
+---
+
 # AvaGen — AI Avatar Generation API
 
 Serverless micro-SaaS API for generating AI avatar images from structured demographic descriptions. Built with Rust/Axum, backed by PostgreSQL, and powered by a local [FLUX.1-schnell OpenVINO INT4](https://huggingface.co/rupeshs/FLUX.1-schnell-openvino-int4) inference sidecar.
